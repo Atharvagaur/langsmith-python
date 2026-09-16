@@ -1,0 +1,135 @@
+# File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+
+from typing import List, Optional
+from datetime import datetime
+from typing_extensions import Literal
+
+from .._models import BaseModel
+
+__all__ = ["Issue", "FixVerification", "LinearContext", "LinearSync", "ValidationResult"]
+
+
+class FixVerification(BaseModel):
+    attempt: Optional[int] = None
+
+    parent_deployment_id: Optional[str] = None
+
+    preview_deployment_id: Optional[str] = None
+
+    reason: Optional[str] = None
+
+    root_trace_ids: Optional[List[str]] = None
+
+    status: Optional[
+        Literal["awaiting_preview", "verifying", "passed", "failed", "inconclusive", "timeout", "error"]
+    ] = None
+
+    updated_at: Optional[datetime] = None
+
+
+class LinearContext(BaseModel):
+    github_pr_urls: Optional[List[str]] = None
+
+    workflow_state: Optional[str] = None
+
+
+class LinearSync(BaseModel):
+    identifier: Optional[str] = None
+
+    issue_id: Optional[str] = None
+
+    last_attempted_at: Optional[datetime] = None
+
+    last_error: Optional[str] = None
+
+    last_synced_at: Optional[datetime] = None
+
+    linear_issue_id: Optional[str] = None
+
+    state: Optional[Literal["pending", "synced", "failed", "auth_required", "paused"]] = None
+
+    url: Optional[str] = None
+
+
+class ValidationResult(BaseModel):
+    active_revision_id: Optional[str] = None
+
+    completed_at: Optional[datetime] = None
+
+    deployment_id: Optional[str] = None
+
+    outcome: Optional[Literal["reproduced", "not_reproduced", "inconclusive", "error"]] = None
+
+    reason: Optional[str] = None
+
+    root_trace_ids: Optional[List[str]] = None
+
+
+class Issue(BaseModel):
+    id: Optional[str] = None
+
+    actions: Optional[object] = None
+
+    auto_resolution_evidence: Optional[object] = None
+
+    auto_resolution_state: Optional[str] = None
+    """Nil unless eligible: "auto_close" or "prompt".
+
+    Evidence carries the deciding gate.
+    """
+
+    created_at: Optional[str] = None
+
+    description: Optional[str] = None
+
+    first_seen_at: Optional[str] = None
+
+    fix_branch: Optional[str] = None
+
+    fix_dispatched_at: Optional[str] = None
+
+    fix_pr_number: Optional[int] = None
+
+    fix_prompt: Optional[str] = None
+
+    fix_verification: Optional[FixVerification] = None
+
+    last_seen_at: Optional[str] = None
+
+    linear_context: Optional[LinearContext] = None
+
+    linear_sync: Optional[LinearSync] = None
+
+    name: Optional[str] = None
+
+    proposed_context_fixes: Optional[List[object]] = None
+
+    proposed_examples: Optional[List[object]] = None
+
+    proposed_fix: Optional[str] = None
+
+    proposed_prompt_fixes: Optional[List[object]] = None
+
+    recurrences_since_watching: Optional[int] = None
+    """
+    RecurrencesSinceWatching counts linked traces whose run start_time is after
+    watching_since — i.e. recurrences observed during the current watch period.
+    """
+
+    session_id: Optional[str] = None
+
+    severity: Optional[Literal[0, 1, 2, 3]] = None
+
+    status: Optional[Literal["open", "fixing", "watching", "completed", "ignored"]] = None
+
+    tags: Optional[List[str]] = None
+
+    tenant_id: Optional[str] = None
+
+    traces: Optional[object] = None
+
+    updated_at: Optional[str] = None
+
+    validation_result: Optional[ValidationResult] = None
+
+    watching_since: Optional[str] = None
