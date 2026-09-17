@@ -193,6 +193,7 @@ class TestOnlineEvaluators:
     @parametrize
     def test_method_list_with_all_params(self, client: Langsmith) -> None:
         online_evaluator = client.online_evaluators.list(
+            agent_id="agent_id",
             feedback_key="feedback_key",
             limit=0,
             name_contains="name_contains",
@@ -552,6 +553,7 @@ class TestAsyncOnlineEvaluators:
     @parametrize
     async def test_method_list_with_all_params(self, async_client: AsyncLangsmith) -> None:
         online_evaluator = await async_client.online_evaluators.list(
+            agent_id="agent_id",
             feedback_key="feedback_key",
             limit=0,
             name_contains="name_contains",
