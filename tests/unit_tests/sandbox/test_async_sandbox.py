@@ -1,0 +1,626 @@
+"""Tests for AsyncSandbox class."""
+
+from unittest.mock import AsyncMock
+
+import pytest
+from pytest_httpx import HTTPXMock
+
+from langsmith.sandbox import (
+    AsyncSandboxClient,
+    AsyncServiceURL,
+    DataplaneNotConfiguredError,
+    ResourceNotFoundError,
+    SandboxConnectionError,
+    SandboxNotReadyError,
+)
+from langsmith.sandbox._async_sandbox import AsyncSandbox
+
+
+@pytest.fixture
+async def client():
+    """Create an AsyncSandboxClient with retries disabled for test isolation."""
+    async with AsyncSandboxClient(
+        api_endpoint="http://test-server:8080", max_retries=0
+    ) as c:
+        yield c
+
+
+@pytest.fixture
+def sandbox(client: AsyncSandboxClient):
+    """Create an AsyncSandbox instance."""
+    return AsyncSandbox.from_dict(
+        data={
+            "name": "test-sandbox",
+            "dataplane_url": "https://sandbox-router.example.com/sb-123",
+        },
+        client=client,
+        auto_delete=False,
+    )
+
+
+class TestAsyncSandboxProperties:
+    """Tests for AsyncSandbox properties."""
+
+    def test_name_property(self, sandbox):
+        """Test name property."""
+        assert sandbox.name == "test-sandbox"
+
+    def test_dataplane_url_property(self, sandbox):
+        """Test dataplane_url property."""
+        assert sandbox.dataplane_url == "https://sandbox-router.example.com/sb-123"
+
+
+class TestAsyncSandboxRetentionFields:
+    """Tests for the two-stage retention fields on AsyncSandbox."""
+
+    def test_from_dict_with_retention(self, client):
+        """from_dict parses idle_ttl_seconds, delete_after_stop_seconds,
+        and stopped_at."""
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "idle_ttl_seconds": 600,
+                "delete_after_stop_seconds": 86400,
+                "stopped_at": "2026-03-24T12:00:00Z",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.idle_ttl_seconds == 600
+        assert sb.delete_after_stop_seconds == 86400
+        assert sb.stopped_at == "2026-03-24T12:00:00Z"
+
+    def test_from_dict_without_retention(self, client):
+        """Retention fields default to None when absent."""
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.idle_ttl_seconds is None
+        assert sb.delete_after_stop_seconds is None
+        assert sb.stopped_at is None
+
+    def test_from_dict_with_zero_retention(self, client):
+        """Zero values are preserved (each disables that retention stage)."""
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "idle_ttl_seconds": 0,
+                "delete_after_stop_seconds": 0,
+                "stopped_at": None,
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.idle_ttl_seconds == 0
+        assert sb.delete_after_stop_seconds == 0
+        assert sb.stopped_at is None
+
+    def test_from_dict_silently_ignores_legacy_fields(self, client):
+        """Older smith-go responses may include the now-removed
+        ttl_seconds/expires_at fields; the SDK should silently drop them."""
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "ttl_seconds": 3600,
+                "expires_at": "2026-03-24T12:00:00Z",
+                "idle_ttl_seconds": 600,
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.idle_ttl_seconds == 600
+        assert sb.delete_after_stop_seconds is None
+        assert sb.stopped_at is None
+        assert not hasattr(sb, "ttl_seconds")
+        assert not hasattr(sb, "expires_at")
+
+
+class TestAsyncSandboxStatusFields:
+    """Tests for status fields on AsyncSandbox."""
+
+    def test_from_dict_with_status(self, client):
+        """Test from_dict parses status fields."""
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "status": "provisioning",
+                "status_message": None,
+                "dataplane_url": "https://sandbox-router.example.com/sb-123",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.status == "provisioning"
+        assert sb.status_message is None
+
+    def test_from_dict_defaults_to_ready(self, client):
+        """Test from_dict defaults status to 'ready' when absent."""
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.status == "ready"
+        assert sb.status_message is None
+
+    async def test_dataplane_op_not_gated_on_status(
+        self, client, httpx_mock: HTTPXMock, monkeypatch
+    ):
+        """The client does not pre-check status: a stopped sandbox still runs;
+        the platform resumes it when the dataplane request arrives."""
+        monkeypatch.setattr(
+            "langsmith.sandbox._async_sandbox.WEBSOCKETS_AVAILABLE", False
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={"stdout": "ok\n", "stderr": "", "exit_code": 0},
+        )
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "status": "stopped",
+                "dataplane_url": "https://sandbox-router.example.com/sb-123",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        result = await sb.run("echo ok")
+        assert result.stdout == "ok\n"
+
+    async def test_missing_dataplane_url_raises_regardless_of_status(self, client):
+        """Without a dataplane_url, dataplane ops raise
+        DataplaneNotConfiguredError — the only client-side precondition."""
+        sb = AsyncSandbox.from_dict(
+            data={"name": "test-sandbox", "status": "stopped"},
+            client=client,
+            auto_delete=False,
+        )
+        with pytest.raises(DataplaneNotConfiguredError):
+            await sb.run("echo hello")
+        with pytest.raises(DataplaneNotConfiguredError):
+            await sb.write("/tmp/test.txt", "hello")
+        with pytest.raises(DataplaneNotConfiguredError):
+            await sb.read("/tmp/test.txt")
+
+    async def test_stop_preserves_dataplane_url(self, client, httpx_mock: HTTPXMock):
+        """stop() must not clear dataplane_url: it stays valid across
+        stop/start and a request on it resumes the sandbox."""
+        httpx_mock.add_response(
+            method="POST",
+            url="http://test-server:8080/boxes/test-sandbox/stop",
+            json={},
+        )
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "status": "ready",
+                "dataplane_url": "https://sandbox-router.example.com/sb-123",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        await sb.stop()
+        assert sb.status == "stopped"
+        assert sb.dataplane_url == "https://sandbox-router.example.com/sb-123"
+
+
+class TestAsyncSandboxRun:
+    """AsyncSandbox.run() over the HTTP fallback path.
+
+    run() uses WebSocket by default; these cases pin the request/response
+    shaping of the blocking HTTP endpoint it falls back to when the websockets
+    library is unavailable.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _ws_unavailable(self, monkeypatch):
+        """Force the missing-websockets condition so run() takes the HTTP path."""
+        monkeypatch.setattr(
+            "langsmith.sandbox._async_sandbox.WEBSOCKETS_AVAILABLE", False
+        )
+
+    async def test_run_command_success(self, sandbox, httpx_mock: HTTPXMock):
+        """Test running a successful command."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={
+                "stdout": "hello world\n",
+                "stderr": "",
+                "exit_code": 0,
+            },
+        )
+
+        result = await sandbox.run("echo hello world")
+
+        assert result.stdout == "hello world\n"
+        assert result.stderr == ""
+        assert result.exit_code == 0
+        assert result.success is True
+
+    async def test_run_command_failure(self, sandbox, httpx_mock: HTTPXMock):
+        """Test running a failing command."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={
+                "stdout": "",
+                "stderr": "command not found\n",
+                "exit_code": 127,
+            },
+        )
+
+        result = await sandbox.run("nonexistent-command")
+
+        assert result.exit_code == 127
+        assert result.success is False
+
+    async def test_run_connection_error(self, sandbox, httpx_mock: HTTPXMock):
+        """Test run with connection error."""
+        import httpx
+
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+
+        with pytest.raises(SandboxConnectionError):
+            await sandbox.run("echo hello")
+
+    async def test_run_starting_sandbox_raises_not_ready(
+        self, sandbox, httpx_mock: HTTPXMock
+    ):
+        """Test run maps router startup refusals to SandboxNotReadyError."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            status_code=503,
+            json={
+                "detail": {
+                    "error": "ServiceUnavailable",
+                    "message": "Sandbox is starting: sb-123",
+                }
+            },
+        )
+
+        with pytest.raises(SandboxNotReadyError, match="Sandbox is starting"):
+            await sandbox.run("echo hello")
+
+    async def test_run_without_dataplane_url(self, client: AsyncSandboxClient):
+        """Test run raises error when dataplane_url is not configured."""
+        sandbox = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "dataplane_url": None,
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        with pytest.raises(DataplaneNotConfiguredError) as exc_info:
+            await sandbox.run("echo hello")
+
+        assert "test-sandbox" in str(exc_info.value)
+        assert "dataplane_url" in str(exc_info.value)
+
+    async def test_run_with_env(self, sandbox, httpx_mock: HTTPXMock):
+        """Test running a command with environment variables."""
+        import json
+
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={"stdout": "hello\n", "stderr": "", "exit_code": 0},
+        )
+
+        await sandbox.run("echo $MY_VAR", env={"MY_VAR": "hello", "OTHER": "value"})
+
+        request = httpx_mock.get_request()
+        payload = json.loads(request.content)
+        assert payload["env"] == {"MY_VAR": "hello", "OTHER": "value"}
+
+    async def test_run_with_custom_headers(self, sandbox, httpx_mock: HTTPXMock):
+        """Test running a command with per-request headers."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={"stdout": "hello\n", "stderr": "", "exit_code": 0},
+        )
+
+        await sandbox.run(
+            "echo hello",
+            headers={
+                "X-Api-Key": "override-key",
+                "X-Test-Header": "sandbox-run",
+            },
+        )
+
+        request = httpx_mock.get_request()
+        assert request.headers.get("X-Api-Key") == "override-key"
+        assert request.headers.get("X-Test-Header") == "sandbox-run"
+
+    async def test_run_with_cwd(self, sandbox, httpx_mock: HTTPXMock):
+        """Test running a command with custom working directory."""
+        import json
+
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={"stdout": "/tmp\n", "stderr": "", "exit_code": 0},
+        )
+
+        await sandbox.run("pwd", cwd="/tmp")
+
+        request = httpx_mock.get_request()
+        payload = json.loads(request.content)
+        assert payload["cwd"] == "/tmp"
+
+    async def test_run_with_custom_shell(self, sandbox, httpx_mock: HTTPXMock):
+        """Test running a command with custom shell."""
+        import json
+
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={"stdout": "", "stderr": "", "exit_code": 0},
+        )
+
+        await sandbox.run("echo hello", shell="/bin/sh")
+
+        request = httpx_mock.get_request()
+        payload = json.loads(request.content)
+        assert payload["shell"] == "/bin/sh"
+
+    async def test_run_default_shell(self, sandbox, httpx_mock: HTTPXMock):
+        """Test that default shell is /bin/bash."""
+        import json
+
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={"stdout": "", "stderr": "", "exit_code": 0},
+        )
+
+        await sandbox.run("echo hello")
+
+        request = httpx_mock.get_request()
+        payload = json.loads(request.content)
+        assert payload["shell"] == "/bin/bash"
+
+    async def test_run_omits_none_values(self, sandbox, httpx_mock: HTTPXMock):
+        """Test that None values for env and cwd are omitted from payload."""
+        import json
+
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/execute",
+            json={"stdout": "", "stderr": "", "exit_code": 0},
+        )
+
+        await sandbox.run("echo hello", env=None, cwd=None)
+
+        request = httpx_mock.get_request()
+        payload = json.loads(request.content)
+        assert "env" not in payload
+        assert "cwd" not in payload
+
+
+class TestAsyncSandboxWrite:
+    """Tests for async sandbox file write."""
+
+    async def test_write_text_file(self, sandbox, httpx_mock: HTTPXMock):
+        """Test writing a text file."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/upload?path=%2Fapp%2Ftest.txt",
+            json={
+                "path": "/app/test.txt",
+                "written": 11,
+            },
+        )
+
+        # Should not raise
+        await sandbox.write("/app/test.txt", "hello world")
+
+        # Verify request is multipart form
+        request = httpx_mock.get_request()
+        assert b"hello world" in request.content
+        content_type = request.headers.get("content-type", "")
+        assert content_type.startswith("multipart/form-data")
+
+    async def test_write_binary_file(self, sandbox, httpx_mock: HTTPXMock):
+        """Test writing a binary file."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/upload?path=%2Fapp%2Fdata.bin",
+            json={
+                "path": "/app/data.bin",
+                "written": 4,
+            },
+        )
+
+        binary_data = b"\x00\x01\x02\x03"
+        await sandbox.write("/app/data.bin", binary_data)
+
+        # Verify request is multipart form with binary content
+        request = httpx_mock.get_request()
+        assert binary_data in request.content
+        content_type = request.headers.get("content-type", "")
+        assert content_type.startswith("multipart/form-data")
+
+    async def test_write_with_custom_headers(self, sandbox, httpx_mock: HTTPXMock):
+        """Test writing a file with per-request headers."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/upload?path=%2Fapp%2Ftest.txt",
+            json={"path": "/app/test.txt", "written": 5},
+        )
+
+        await sandbox.write(
+            "/app/test.txt",
+            "hello",
+            headers={"X-Test-Header": "sandbox-write"},
+        )
+
+        request = httpx_mock.get_request()
+        assert request.headers.get("X-Test-Header") == "sandbox-write"
+
+    async def test_write_without_dataplane_url(self, client: AsyncSandboxClient):
+        """Test write raises error when dataplane_url is not configured."""
+        sandbox = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "dataplane_url": None,
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        with pytest.raises(DataplaneNotConfiguredError) as exc_info:
+            await sandbox.write("/app/test.txt", "hello")
+
+        assert "test-sandbox" in str(exc_info.value)
+
+
+class TestAsyncSandboxRead:
+    """Tests for async sandbox file read."""
+
+    async def test_read_text_file(self, sandbox, httpx_mock: HTTPXMock):
+        """Test reading a text file."""
+        # URL uses query parameter with encoded path
+        httpx_mock.add_response(
+            method="GET",
+            url="https://sandbox-router.example.com/sb-123/download?path=%2Fapp%2Ftest.txt",
+            content=b"hello world",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+        content = await sandbox.read("/app/test.txt")
+
+        assert content == b"hello world"
+
+    async def test_read_binary_file(self, sandbox, httpx_mock: HTTPXMock):
+        """Test reading a binary file."""
+        binary_data = b"\x00\x01\x02\x03"
+
+        httpx_mock.add_response(
+            method="GET",
+            url="https://sandbox-router.example.com/sb-123/download?path=%2Fapp%2Fdata.bin",
+            content=binary_data,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+        content = await sandbox.read("/app/data.bin")
+
+        assert content == binary_data
+
+    async def test_read_file_not_found(self, sandbox, httpx_mock: HTTPXMock):
+        """Test reading non-existent file."""
+        httpx_mock.add_response(
+            method="GET",
+            url="https://sandbox-router.example.com/sb-123/download?path=%2Fapp%2Fnonexistent.txt",
+            json={"error": "NotFound", "message": "file not found"},
+            status_code=404,
+        )
+
+        with pytest.raises(ResourceNotFoundError):
+            await sandbox.read("/app/nonexistent.txt")
+
+    async def test_read_without_dataplane_url(self, client: AsyncSandboxClient):
+        """Test read raises error when dataplane_url is not configured."""
+        sandbox = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "dataplane_url": None,
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        with pytest.raises(DataplaneNotConfiguredError) as exc_info:
+            await sandbox.read("/app/test.txt")
+
+        assert "test-sandbox" in str(exc_info.value)
+
+
+class TestAsyncSandboxContextManager:
+    """Tests for async sandbox context manager."""
+
+    async def test_auto_delete_on_exit(
+        self, client: AsyncSandboxClient, httpx_mock: HTTPXMock
+    ):
+        """Test sandbox is deleted on async context exit."""
+        httpx_mock.add_response(
+            method="DELETE",
+            url="http://test-server:8080/boxes/test-sandbox",
+            status_code=204,
+        )
+
+        sandbox = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+            },
+            client=client,
+            auto_delete=True,
+        )
+
+        async with sandbox:
+            pass
+
+        # Verify delete was called
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 1
+        assert requests[0].method == "DELETE"
+
+    async def test_no_delete_when_auto_delete_false(
+        self, client: AsyncSandboxClient, httpx_mock: HTTPXMock
+    ):
+        """Test sandbox is not deleted when auto_delete is False."""
+        sandbox = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        async with sandbox:
+            pass
+
+        # Verify no delete request
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 0
+
+
+class TestAsyncSandboxService:
+    """Tests for AsyncSandbox.service() convenience method."""
+
+    async def test_service_delegates_to_client(self, client: AsyncSandboxClient):
+        """Test service() calls client.service() with sandbox name."""
+        mock_svc = AsyncServiceURL(
+            browser_url="http://b",
+            service_url="http://s/",
+            token="t",
+            expires_at="2026-04-01T12:10:00Z",
+        )
+        client.service = AsyncMock(return_value=mock_svc)  # type: ignore[method-assign]
+
+        sb = AsyncSandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "dataplane_url": "https://sandbox-router.example.com/sb-123",
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        result = await sb.service(port=3000, expires_in_seconds=1800)
+
+        client.service.assert_called_once_with(
+            "test-sandbox", 3000, expires_in_seconds=1800, headers=None
+        )
+        assert result is mock_svc

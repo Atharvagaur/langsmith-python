@@ -1,0 +1,440 @@
+interactions:
+- request:
+    body: '{"model":"gpt-3.5-turbo-instruct","prompt":["Say ''Foo'' then stop."],"max_tokens":3,"seed":42,"stream":false,"temperature":0}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '124'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.22.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.2
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/completions
+  response:
+    body:
+      string: "{\n  \"id\": \"cmpl-DELCO4RZ1ULoVZDBMmAscqlYd3NHL\",\n  \"object\":
+        \"text_completion\",\n  \"created\": 1772310452,\n  \"model\": \"gpt-3.5-turbo-instruct:20230824-v2\",\n
+        \ \"choices\": [\n    {\n      \"text\": \"\\n\\nFoo\",\n      \"index\":
+        0,\n      \"logprobs\": null,\n      \"finish_reason\": \"stop\"\n    }\n
+        \ ],\n  \"usage\": {\n    \"prompt_tokens\": 7,\n    \"completion_tokens\":
+        2,\n    \"total_tokens\": 9\n  }\n}\n"
+    headers:
+      Access-Control-Allow-Origin:
+      - '*'
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - 9d52a9c43964c132-SJC
+      Cache-Control:
+      - no-cache, must-revalidate
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Sat, 28 Feb 2026 20:27:32 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Transfer-Encoding:
+      - chunked
+      Via:
+      - envoy-router-canary-68d878cbd6-vcgw6
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      content-length:
+      - '375'
+      openai-model:
+      - gpt-3.5-turbo-instruct:20230824-v2
+      openai-organization:
+      - langchain
+      openai-processing-ms:
+      - '195'
+      openai-project:
+      - proj_IfpviNC2vx5jMiYFE4hbElsy
+      openai-version:
+      - '2020-10-01'
+      set-cookie:
+      - __cf_bm=23DcJJzvK4Bk0gQxOh_Zrn9_NjgsStD6VE7jlGPpseA-1772310451.8749077-1.0.1.1-2p_vp23_bGsnhI0E40xOXDxsLlCwZWHOHVK3ASGmszjGruBekF38TaKwfyZOJVRKsMLQLfTE5FHXjJIeq8TDeXXd.o06F8ftaOY2foMXDkSAUT8xS9ZTm.KEbov2lAiw;
+        HttpOnly; Secure; Path=/; Domain=api.openai.com; Expires=Sat, 28 Feb 2026
+        20:57:32 GMT
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '3500'
+      x-ratelimit-limit-tokens:
+      - '90000'
+      x-ratelimit-remaining-requests:
+      - '3498'
+      x-ratelimit-remaining-tokens:
+      - '89994'
+      x-ratelimit-reset-requests:
+      - 17ms
+      x-ratelimit-reset-tokens:
+      - 4ms
+      x-request-id:
+      - req_06672dff11a74551a22b559340099e5f
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"model":"gpt-3.5-turbo-instruct","prompt":["Say ''Foo'' then stop."],"max_tokens":3,"seed":42,"stream":false,"temperature":0}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '124'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.22.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.2
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/completions
+  response:
+    body:
+      string: "{\n  \"id\": \"cmpl-DELCOLVK6iMjyFYUhzjlPjIou1jvY\",\n  \"object\":
+        \"text_completion\",\n  \"created\": 1772310452,\n  \"model\": \"gpt-3.5-turbo-instruct:20230824-v2\",\n
+        \ \"choices\": [\n    {\n      \"text\": \"\\n\\nFoo\",\n      \"index\":
+        0,\n      \"logprobs\": null,\n      \"finish_reason\": \"stop\"\n    }\n
+        \ ],\n  \"usage\": {\n    \"prompt_tokens\": 7,\n    \"completion_tokens\":
+        2,\n    \"total_tokens\": 9\n  }\n}\n"
+    headers:
+      Access-Control-Allow-Origin:
+      - '*'
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - 9d52a9c6f890eb34-SJC
+      Cache-Control:
+      - no-cache, must-revalidate
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json
+      Date:
+      - Sat, 28 Feb 2026 20:27:32 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Transfer-Encoding:
+      - chunked
+      Via:
+      - envoy-router-7d9b588896-m4528
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      content-length:
+      - '375'
+      openai-model:
+      - gpt-3.5-turbo-instruct:20230824-v2
+      openai-organization:
+      - langchain
+      openai-processing-ms:
+      - '114'
+      openai-project:
+      - proj_IfpviNC2vx5jMiYFE4hbElsy
+      openai-version:
+      - '2020-10-01'
+      set-cookie:
+      - __cf_bm=JiMuPeTFZppcUPLaMl0xeyzO9NitaR_lI8omttChKdI-1772310452.314753-1.0.1.1-HA304ktyUrncBR07033US49xrlPRP9pQhaYFu08WDFebIyjrbfEUXNczl7pbI69rUF7_COZvJgGmKSEGEwrX1RYZZnn_IZg_LXu3SSjSpLqTUBiZ1P9grtx8IMB00p7b;
+        HttpOnly; Secure; Path=/; Domain=api.openai.com; Expires=Sat, 28 Feb 2026
+        20:57:32 GMT
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '3500'
+      x-ratelimit-limit-tokens:
+      - '90000'
+      x-ratelimit-remaining-requests:
+      - '3498'
+      x-ratelimit-remaining-tokens:
+      - '89994'
+      x-ratelimit-reset-requests:
+      - 17ms
+      x-ratelimit-reset-tokens:
+      - 4ms
+      x-request-id:
+      - req_4f2bf009c29945e89c19ae9eec89f85d
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"model":"gpt-3.5-turbo-instruct","prompt":["Say ''Foo'' then stop."],"max_tokens":3,"seed":42,"stream":true,"temperature":0}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '123'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.22.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.2
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/completions
+  response:
+    body:
+      string: 'data: {"id":"cmpl-DELCPNAGhpmG7riU25idrvqnbzI8N","object":"text_completion","created":1772310453,"choices":[{"text":"\n\n","index":0,"logprobs":null,"finish_reason":null}],"model":"gpt-3.5-turbo-instruct:20230824-v2"}
+
+
+        data: {"id":"cmpl-DELCPNAGhpmG7riU25idrvqnbzI8N","object":"text_completion","created":1772310453,"choices":[{"text":"Foo","index":0,"logprobs":null,"finish_reason":null}],"model":"gpt-3.5-turbo-instruct:20230824-v2"}
+
+
+        data: {"id":"cmpl-DELCPNAGhpmG7riU25idrvqnbzI8N","object":"text_completion","created":1772310453,"choices":[{"text":"","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"gpt-3.5-turbo-instruct:20230824-v2"}
+
+
+        data: [DONE]
+
+
+        '
+    headers:
+      Access-Control-Allow-Origin:
+      - '*'
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - 9d52a9cb78f40dfd-SJC
+      Cache-Control:
+      - no-cache, must-revalidate
+      Connection:
+      - keep-alive
+      Content-Type:
+      - text/event-stream
+      Date:
+      - Sat, 28 Feb 2026 20:27:33 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Transfer-Encoding:
+      - chunked
+      Via:
+      - envoy-router-canary-6cdbcdbbf6-m2bnm
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      openai-model:
+      - gpt-3.5-turbo-instruct:20230824-v2
+      openai-organization:
+      - langchain
+      openai-processing-ms:
+      - '700'
+      openai-project:
+      - proj_IfpviNC2vx5jMiYFE4hbElsy
+      openai-version:
+      - '2020-10-01'
+      set-cookie:
+      - __cf_bm=10nhU.DMZlsv.tKQ3ZLlfpOY_VKU32qe8MRMWZcoW_0-1772310453.0321217-1.0.1.1-_eY3jwanf6icF5PKBxuZ.flus2jEPr6ep8HqYntjIpWEOuacqQGo0YAbSSLso8..tOO_bRE_LzhSi1FqUTSUCZb4gYeSVSzFsFTEF2xmw7Cg_Ky3hc3R3iLSAfmkdcoj;
+        HttpOnly; Secure; Path=/; Domain=api.openai.com; Expires=Sat, 28 Feb 2026
+        20:57:33 GMT
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '3500'
+      x-ratelimit-limit-tokens:
+      - '90000'
+      x-ratelimit-remaining-requests:
+      - '3498'
+      x-ratelimit-remaining-tokens:
+      - '89994'
+      x-ratelimit-reset-requests:
+      - 17ms
+      x-ratelimit-reset-tokens:
+      - 4ms
+      x-request-id:
+      - req_68682af3b1dc4aca935d13d9ea7493a1
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"model":"gpt-3.5-turbo-instruct","prompt":["Say ''Foo'' then stop."],"max_tokens":3,"seed":42,"stream":true,"temperature":0}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '123'
+      Content-Type:
+      - application/json
+      Host:
+      - api.openai.com
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.22.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.12.2
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://api.openai.com/v1/completions
+  response:
+    body:
+      string: 'data: {"id":"cmpl-DELCQ2N4506AoxuGvGEkXFdkKmScE","object":"text_completion","created":1772310454,"choices":[{"text":"\n\n","index":0,"logprobs":null,"finish_reason":null}],"model":"gpt-3.5-turbo-instruct:20230824-v2"}
+
+
+        data: {"id":"cmpl-DELCQ2N4506AoxuGvGEkXFdkKmScE","object":"text_completion","created":1772310454,"choices":[{"text":"Foo","index":0,"logprobs":null,"finish_reason":null}],"model":"gpt-3.5-turbo-instruct:20230824-v2"}
+
+
+        data: {"id":"cmpl-DELCQ2N4506AoxuGvGEkXFdkKmScE","object":"text_completion","created":1772310454,"choices":[{"text":"","index":0,"logprobs":null,"finish_reason":"stop"}],"model":"gpt-3.5-turbo-instruct:20230824-v2"}
+
+
+        data: [DONE]
+
+
+        '
+    headers:
+      Access-Control-Allow-Origin:
+      - '*'
+      CF-Cache-Status:
+      - DYNAMIC
+      CF-Ray:
+      - 9d52a9d20d071990-SJC
+      Cache-Control:
+      - no-cache, must-revalidate
+      Connection:
+      - keep-alive
+      Content-Type:
+      - text/event-stream
+      Date:
+      - Sat, 28 Feb 2026 20:27:34 GMT
+      Server:
+      - cloudflare
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      Transfer-Encoding:
+      - chunked
+      Via:
+      - envoy-router-5ff87fdccf-ghm2j
+      X-Content-Type-Options:
+      - nosniff
+      access-control-expose-headers:
+      - X-Request-ID
+      alt-svc:
+      - h3=":443"; ma=86400
+      openai-model:
+      - gpt-3.5-turbo-instruct:20230824-v2
+      openai-organization:
+      - langchain
+      openai-processing-ms:
+      - '94'
+      openai-project:
+      - proj_IfpviNC2vx5jMiYFE4hbElsy
+      openai-version:
+      - '2020-10-01'
+      set-cookie:
+      - __cf_bm=WdR7RFeZt9MfEWDDozwHU94HgQgFTsEJ7EWY3Rjp670-1772310454.0865183-1.0.1.1-AzYdnrKSLsrgqmbF4Txa8.QyAYUWORd2Hvr.depGy8P_zIc29vdNGOwhYHoCU.b0C0gkOa42S1hm94kqeqJ3bXap9_cnM9abTdfkcXCdTL3xGUPs.eTiKmlovn.uyyKP;
+        HttpOnly; Secure; Path=/; Domain=api.openai.com; Expires=Sat, 28 Feb 2026
+        20:57:34 GMT
+      x-openai-proxy-wasm:
+      - v0.1
+      x-ratelimit-limit-requests:
+      - '3500'
+      x-ratelimit-limit-tokens:
+      - '90000'
+      x-ratelimit-remaining-requests:
+      - '3498'
+      x-ratelimit-remaining-tokens:
+      - '89994'
+      x-ratelimit-reset-requests:
+      - 17ms
+      x-ratelimit-reset-tokens:
+      - 4ms
+      x-request-id:
+      - req_1e555221719247319f759095823c356a
+    status:
+      code: 200
+      message: OK
+version: 1

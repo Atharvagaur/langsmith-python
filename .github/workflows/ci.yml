@@ -29,10 +29,42 @@ jobs:
           version: '0.10.2'
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --group dev --group lint --extra aiohttp
 
       - name: Run lints
         run: ./scripts/lint
+
+  test:
+    timeout-minutes: 20
+    name: "test ${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    if: (github.event_name == 'push' || github.event.pull_request.head.repo.fork) && (github.event_name != 'push' || github.event.head_commit.message != 'codegen metadata')
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: '0.10.2'
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          uv sync --group dev --group lint --group test
+          uv pip install langchain
+
+      - name: Run unit tests
+        # Same invocation as langsmith-sdk's `make tests`: strip any LANGSMITH_*
+        # config from the runner, run offline, alias httpx -> httpx2 for tests.
+        run: |
+          env \
+            -u LANGCHAIN_PROJECT -u LANGCHAIN_API_KEY -u LANGCHAIN_TRACING_V2 -u LANGSMITH_TRACING \
+            PYTHONDEVMODE=1 PYTHONASYNCIODEBUG=1 PYTHONPATH=tests/httpx2_alias \
+            uv run python -m pytest --disable-socket --allow-unix-socket -n auto --durations=10 tests/unit_tests
 
   build:
     if: (github.event_name == 'push' || github.event.pull_request.head.repo.fork) && (github.event_name != 'push' || github.event.head_commit.message != 'codegen metadata')
@@ -51,7 +83,7 @@ jobs:
           version: '0.10.2'
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: uv sync --group dev --group lint --extra aiohttp
 
       - name: Run build
         run: uv build
