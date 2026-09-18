@@ -101,6 +101,8 @@ class TestThreads:
             filter="filter",
             page_size=1,
             selects=["THREAD_ID"],
+            trace_filter="trace_filter",
+            tree_filter="tree_filter",
         )
         assert_matches_type(SyncItemsCursorGetPagination[ThreadTrace], thread, path=["response"])
 
@@ -328,6 +330,8 @@ class TestAsyncThreads:
             filter="filter",
             page_size=1,
             selects=["THREAD_ID"],
+            trace_filter="trace_filter",
+            tree_filter="tree_filter",
         )
         assert_matches_type(AsyncItemsCursorGetPagination[ThreadTrace], thread, path=["response"])
 
