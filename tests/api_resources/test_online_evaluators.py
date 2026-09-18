@@ -39,6 +39,13 @@ class TestOnlineEvaluators:
                 "code": "code",
                 "dependencies": "dependencies",
                 "language": "language",
+                "managed_code_evaluator_key": "managed_code_evaluator_key",
+                "managed_code_evaluator_settings": {
+                    "foo": {
+                        "is_enabled": True,
+                        "key_name": "key_name",
+                    }
+                },
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -135,6 +142,12 @@ class TestOnlineEvaluators:
                 "code": "code",
                 "dependencies": "dependencies",
                 "language": "language",
+                "managed_code_evaluator_settings": {
+                    "foo": {
+                        "is_enabled": True,
+                        "key_name": "key_name",
+                    }
+                },
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -399,6 +412,13 @@ class TestAsyncOnlineEvaluators:
                 "code": "code",
                 "dependencies": "dependencies",
                 "language": "language",
+                "managed_code_evaluator_key": "managed_code_evaluator_key",
+                "managed_code_evaluator_settings": {
+                    "foo": {
+                        "is_enabled": True,
+                        "key_name": "key_name",
+                    }
+                },
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -495,6 +515,12 @@ class TestAsyncOnlineEvaluators:
                 "code": "code",
                 "dependencies": "dependencies",
                 "language": "language",
+                "managed_code_evaluator_settings": {
+                    "foo": {
+                        "is_enabled": True,
+                        "key_name": "key_name",
+                    }
+                },
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
