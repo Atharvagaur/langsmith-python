@@ -4271,7 +4271,7 @@ async def test_runs_retrieve(v2_client: Client) -> None:
     run = None
     for _ in range(15):
         try:
-            run = await v2_client.runs.retrieve(
+            run = await v2_client.runs.retrieve_v2(
                 run_id=run_id,
                 project_id=project_id,
                 start_time=start.isoformat(),
@@ -4295,7 +4295,7 @@ async def test_runs_query(v2_client: Client) -> None:
     for _ in range(15):
         runs = [
             r
-            async for r in v2_client.runs.query(
+            async for r in v2_client.runs.query_v2(
                 project_ids=[project_id],
                 selects=_V2_DEFAULT_SELECTS,
             )

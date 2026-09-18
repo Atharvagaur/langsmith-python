@@ -73,7 +73,7 @@ async def shared_run(langchain_client: Client):
     async def _run_indexed() -> Optional[Tuple[str, str]]:
         """Return (project_id, trace_id) once the run is retrievable."""
         project_id = str(langchain_client.read_project(project_name=project_name).id)
-        run = await langchain_client.runs.retrieve(
+        run = await langchain_client.runs.retrieve_v2(
             run_id=run_id,
             project_id=project_id,
             start_time=now.isoformat(),
