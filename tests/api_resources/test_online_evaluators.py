@@ -46,6 +46,7 @@ class TestOnlineEvaluators:
                         "key_name": "key_name",
                     }
                 },
+                "require_attachments": True,
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -148,6 +149,7 @@ class TestOnlineEvaluators:
                         "key_name": "key_name",
                     }
                 },
+                "require_attachments": True,
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -419,6 +421,7 @@ class TestAsyncOnlineEvaluators:
                         "key_name": "key_name",
                     }
                 },
+                "require_attachments": True,
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -521,6 +524,7 @@ class TestAsyncOnlineEvaluators:
                         "key_name": "key_name",
                     }
                 },
+                "require_attachments": True,
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
