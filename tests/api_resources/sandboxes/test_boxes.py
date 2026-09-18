@@ -34,6 +34,10 @@ class TestBoxes:
     @parametrize
     def test_method_create_with_all_params(self, client: Langsmith) -> None:
         box = client.sandboxes.boxes.create(
+            access_delegation={
+                "mode": "INHERIT",
+                "permissions": ["string"],
+            },
             cpu_millicores=0,
             delete_after_stop_seconds=0,
             env_vars={"foo": "string"},
@@ -756,6 +760,10 @@ class TestAsyncBoxes:
     @parametrize
     async def test_method_create_with_all_params(self, async_client: AsyncLangsmith) -> None:
         box = await async_client.sandboxes.boxes.create(
+            access_delegation={
+                "mode": "INHERIT",
+                "permissions": ["string"],
+            },
             cpu_millicores=0,
             delete_after_stop_seconds=0,
             env_vars={"foo": "string"},
