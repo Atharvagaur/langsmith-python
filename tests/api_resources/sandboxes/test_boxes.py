@@ -17,6 +17,9 @@ from langsmith.types import (
     SandboxStatusResponse,
 )
 from langsmith.pagination import SyncItemsCursorGetPagination, AsyncItemsCursorGetPagination
+from langsmith.types.sandboxes import (
+    BoxListServiceURLsResponse,
+)
 
 base_url = os.environ.get("TEST_API_BASE_URL", "http://127.0.0.1:4010")
 
@@ -502,6 +505,58 @@ class TestBoxes:
 
     @pytest.mark.skip(reason="Mock server tests are disabled")
     @parametrize
+    def test_method_delete_service_url(self, client: Langsmith) -> None:
+        box = client.sandboxes.boxes.delete_service_url(
+            name="name",
+        )
+        assert box is None
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_method_delete_service_url_with_all_params(self, client: Langsmith) -> None:
+        box = client.sandboxes.boxes.delete_service_url(
+            name="name",
+            port=0,
+        )
+        assert box is None
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_raw_response_delete_service_url(self, client: Langsmith) -> None:
+
+        response = client.sandboxes.boxes.with_raw_response.delete_service_url(
+            name="name",
+        )
+
+        assert response.is_closed is True
+        assert response.http_request.headers.get("X-Stainless-Lang") == "python"
+        box = response.parse()
+        assert box is None
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_streaming_response_delete_service_url(self, client: Langsmith) -> None:
+        with client.sandboxes.boxes.with_streaming_response.delete_service_url(
+            name="name",
+        ) as response:
+            assert not response.is_closed
+            assert response.http_request.headers.get("X-Stainless-Lang") == "python"
+
+            box = response.parse()
+            assert box is None
+
+        assert cast(Any, response.is_closed) is True
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_path_params_delete_service_url(self, client: Langsmith) -> None:
+        with pytest.raises(ValueError, match=r"Expected a non-empty value for `name` but received ''"):
+            client.sandboxes.boxes.with_raw_response.delete_service_url(
+                name="",
+            )
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
     def test_method_generate_download_url(self, client: Langsmith) -> None:
         box = client.sandboxes.boxes.generate_download_url(
             name="name",
@@ -656,6 +711,59 @@ class TestBoxes:
         with pytest.raises(ValueError, match=r"Expected a non-empty value for `name` but received ''"):
             client.sandboxes.boxes.with_raw_response.get_status(
                 "",
+            )
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_method_list_service_urls(self, client: Langsmith) -> None:
+        box = client.sandboxes.boxes.list_service_urls(
+            name="name",
+        )
+        assert_matches_type(SyncItemsCursorGetPagination[BoxListServiceURLsResponse], box, path=["response"])
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_method_list_service_urls_with_all_params(self, client: Langsmith) -> None:
+        box = client.sandboxes.boxes.list_service_urls(
+            name="name",
+            cursor="cursor",
+            page_size=0,
+        )
+        assert_matches_type(SyncItemsCursorGetPagination[BoxListServiceURLsResponse], box, path=["response"])
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_raw_response_list_service_urls(self, client: Langsmith) -> None:
+
+        response = client.sandboxes.boxes.with_raw_response.list_service_urls(
+            name="name",
+        )
+
+        assert response.is_closed is True
+        assert response.http_request.headers.get("X-Stainless-Lang") == "python"
+        box = response.parse()
+        assert_matches_type(SyncItemsCursorGetPagination[BoxListServiceURLsResponse], box, path=["response"])
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_streaming_response_list_service_urls(self, client: Langsmith) -> None:
+        with client.sandboxes.boxes.with_streaming_response.list_service_urls(
+            name="name",
+        ) as response:
+            assert not response.is_closed
+            assert response.http_request.headers.get("X-Stainless-Lang") == "python"
+
+            box = response.parse()
+            assert_matches_type(SyncItemsCursorGetPagination[BoxListServiceURLsResponse], box, path=["response"])
+
+        assert cast(Any, response.is_closed) is True
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    def test_path_params_list_service_urls(self, client: Langsmith) -> None:
+        with pytest.raises(ValueError, match=r"Expected a non-empty value for `name` but received ''"):
+            client.sandboxes.boxes.with_raw_response.list_service_urls(
+                name="",
             )
 
     @pytest.mark.skip(reason="Mock server tests are disabled")
@@ -1228,6 +1336,58 @@ class TestAsyncBoxes:
 
     @pytest.mark.skip(reason="Mock server tests are disabled")
     @parametrize
+    async def test_method_delete_service_url(self, async_client: AsyncLangsmith) -> None:
+        box = await async_client.sandboxes.boxes.delete_service_url(
+            name="name",
+        )
+        assert box is None
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_method_delete_service_url_with_all_params(self, async_client: AsyncLangsmith) -> None:
+        box = await async_client.sandboxes.boxes.delete_service_url(
+            name="name",
+            port=0,
+        )
+        assert box is None
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_raw_response_delete_service_url(self, async_client: AsyncLangsmith) -> None:
+
+        response = await async_client.sandboxes.boxes.with_raw_response.delete_service_url(
+            name="name",
+        )
+
+        assert response.is_closed is True
+        assert response.http_request.headers.get("X-Stainless-Lang") == "python"
+        box = await response.parse()
+        assert box is None
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_streaming_response_delete_service_url(self, async_client: AsyncLangsmith) -> None:
+        async with async_client.sandboxes.boxes.with_streaming_response.delete_service_url(
+            name="name",
+        ) as response:
+            assert not response.is_closed
+            assert response.http_request.headers.get("X-Stainless-Lang") == "python"
+
+            box = await response.parse()
+            assert box is None
+
+        assert cast(Any, response.is_closed) is True
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_path_params_delete_service_url(self, async_client: AsyncLangsmith) -> None:
+        with pytest.raises(ValueError, match=r"Expected a non-empty value for `name` but received ''"):
+            await async_client.sandboxes.boxes.with_raw_response.delete_service_url(
+                name="",
+            )
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
     async def test_method_generate_download_url(self, async_client: AsyncLangsmith) -> None:
         box = await async_client.sandboxes.boxes.generate_download_url(
             name="name",
@@ -1382,6 +1542,59 @@ class TestAsyncBoxes:
         with pytest.raises(ValueError, match=r"Expected a non-empty value for `name` but received ''"):
             await async_client.sandboxes.boxes.with_raw_response.get_status(
                 "",
+            )
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_method_list_service_urls(self, async_client: AsyncLangsmith) -> None:
+        box = await async_client.sandboxes.boxes.list_service_urls(
+            name="name",
+        )
+        assert_matches_type(AsyncItemsCursorGetPagination[BoxListServiceURLsResponse], box, path=["response"])
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_method_list_service_urls_with_all_params(self, async_client: AsyncLangsmith) -> None:
+        box = await async_client.sandboxes.boxes.list_service_urls(
+            name="name",
+            cursor="cursor",
+            page_size=0,
+        )
+        assert_matches_type(AsyncItemsCursorGetPagination[BoxListServiceURLsResponse], box, path=["response"])
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_raw_response_list_service_urls(self, async_client: AsyncLangsmith) -> None:
+
+        response = await async_client.sandboxes.boxes.with_raw_response.list_service_urls(
+            name="name",
+        )
+
+        assert response.is_closed is True
+        assert response.http_request.headers.get("X-Stainless-Lang") == "python"
+        box = await response.parse()
+        assert_matches_type(AsyncItemsCursorGetPagination[BoxListServiceURLsResponse], box, path=["response"])
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_streaming_response_list_service_urls(self, async_client: AsyncLangsmith) -> None:
+        async with async_client.sandboxes.boxes.with_streaming_response.list_service_urls(
+            name="name",
+        ) as response:
+            assert not response.is_closed
+            assert response.http_request.headers.get("X-Stainless-Lang") == "python"
+
+            box = await response.parse()
+            assert_matches_type(AsyncItemsCursorGetPagination[BoxListServiceURLsResponse], box, path=["response"])
+
+        assert cast(Any, response.is_closed) is True
+
+    @pytest.mark.skip(reason="Mock server tests are disabled")
+    @parametrize
+    async def test_path_params_list_service_urls(self, async_client: AsyncLangsmith) -> None:
+        with pytest.raises(ValueError, match=r"Expected a non-empty value for `name` but received ''"):
+            await async_client.sandboxes.boxes.with_raw_response.list_service_urls(
+                name="",
             )
 
     @pytest.mark.skip(reason="Mock server tests are disabled")

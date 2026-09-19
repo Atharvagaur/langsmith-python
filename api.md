@@ -313,6 +313,12 @@ Methods:
 
 ## Boxes
 
+Types:
+
+```python
+from langsmith.types.sandboxes import BoxListServiceURLsResponse
+```
+
 Methods:
 
 - <code title="post /api/v2/sandboxes/boxes">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">create</a>(\*\*<a href="src/langsmith/types/sandboxes/box_create_params.py">params</a>) -> <a href="./src/langsmith/types/sandbox_response.py">SandboxResponse</a></code>
@@ -321,9 +327,11 @@ Methods:
 - <code title="get /api/v2/sandboxes/boxes">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">list</a>(\*\*<a href="src/langsmith/types/sandboxes/box_list_params.py">params</a>) -> <a href="./src/langsmith/types/sandbox_response.py">SyncItemsCursorGetPagination[SandboxResponse]</a></code>
 - <code title="delete /api/v2/sandboxes/boxes/{name}">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">delete</a>(name) -> None</code>
 - <code title="post /api/v2/sandboxes/boxes/{name}/snapshot">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">create_snapshot</a>(path_name, \*\*<a href="src/langsmith/types/sandboxes/box_create_snapshot_params.py">params</a>) -> <a href="./src/langsmith/types/snapshot_response.py">SnapshotResponse</a></code>
+- <code title="delete /api/v2/sandboxes/boxes/{name}/service-urls">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">delete_service_url</a>(name, \*\*<a href="src/langsmith/types/sandboxes/box_delete_service_url_params.py">params</a>) -> None</code>
 - <code title="post /api/v2/sandboxes/boxes/{name}/download-url">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">generate_download_url</a>(name, \*\*<a href="src/langsmith/types/sandboxes/box_generate_download_url_params.py">params</a>) -> <a href="./src/langsmith/types/download_url_response.py">DownloadURLResponse</a></code>
 - <code title="post /api/v2/sandboxes/boxes/{name}/service-url">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">generate_service_url</a>(name, \*\*<a href="src/langsmith/types/sandboxes/box_generate_service_url_params.py">params</a>) -> <a href="./src/langsmith/types/service_url_response.py">ServiceURLResponse</a></code>
 - <code title="get /api/v2/sandboxes/boxes/{name}/status">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">get_status</a>(name) -> <a href="./src/langsmith/types/sandbox_status_response.py">SandboxStatusResponse</a></code>
+- <code title="get /api/v2/sandboxes/boxes/{name}/service-urls">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">list_service_urls</a>(name, \*\*<a href="src/langsmith/types/sandboxes/box_list_service_urls_params.py">params</a>) -> <a href="./src/langsmith/types/sandboxes/box_list_service_urls_response.py">SyncItemsCursorGetPagination[BoxListServiceURLsResponse]</a></code>
 - <code title="post /api/v2/sandboxes/boxes/{name}/start">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">start</a>(name) -> <a href="./src/langsmith/types/sandbox_response.py">SandboxResponse</a></code>
 - <code title="post /api/v2/sandboxes/boxes/{name}/stop">client.sandboxes.boxes.<a href="./src/langsmith/resources/sandboxes/boxes.py">stop</a>(name) -> None</code>
 
