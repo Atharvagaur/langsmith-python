@@ -4,28 +4,14 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-
-
 export DEFER_PYDANTIC_BUILD=false
 
-# Note that we need to specify the patch version here so that uv
-# won't use unstable (alpha, beta, rc) releases for the tests
-PY_VERSION_MIN=">=3.10.0"
-PY_VERSION_MAX=">=3.14.0"
+# integration_tests / evaluation / external need a live deployment and API keys.
+TEST=${TEST:-"tests --ignore=tests/integration_tests --ignore=tests/evaluation --ignore=tests/external"}
 
-function run_tests() {
-    uv run --isolated --group dev pytest "$@"
-}
-
-# If UV_PYTHON is already set in the environment, just run the command once
-if [[ -n "$UV_PYTHON" ]]; then
-  run_tests "$@"
-else
-  # If UV_PYTHON is not set, run the command for min and max versions
-
-  echo "==> Running tests for Python $PY_VERSION_MIN"
-  UV_PYTHON="$PY_VERSION_MIN" run_tests "$@"
-
-  echo "==> Running tests for Python $PY_VERSION_MAX"
-  UV_PYTHON="$PY_VERSION_MAX" run_tests "$@"
-fi
+echo "==> Running tests"
+# shellcheck disable=SC2086
+env \
+  -u LANGCHAIN_PROJECT -u LANGCHAIN_API_KEY -u LANGCHAIN_TRACING_V2 -u LANGSMITH_TRACING \
+  PYTHONDEVMODE=1 PYTHONASYNCIODEBUG=1 PYTHONPATH=tests/httpx2_alias \
+  uv run python -m pytest --disable-socket --allow-unix-socket -n auto --durations=10 $TEST "$@"

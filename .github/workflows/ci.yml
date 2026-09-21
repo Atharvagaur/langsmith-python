@@ -14,6 +14,9 @@ on:
       - 'stl-preview-head/**'
       - 'stl-preview-base/**'
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     timeout-minutes: 10
@@ -57,14 +60,8 @@ jobs:
           uv sync --group dev --group lint --group test
           uv pip install langchain
 
-      - name: Run unit tests
-        # Same invocation as langsmith-sdk's `make tests`: strip any LANGSMITH_*
-        # config from the runner, run offline, alias httpx -> httpx2 for tests.
-        run: |
-          env \
-            -u LANGCHAIN_PROJECT -u LANGCHAIN_API_KEY -u LANGCHAIN_TRACING_V2 -u LANGSMITH_TRACING \
-            PYTHONDEVMODE=1 PYTHONASYNCIODEBUG=1 PYTHONPATH=tests/httpx2_alias \
-            uv run python -m pytest --disable-socket --allow-unix-socket -n auto --durations=10 tests/unit_tests
+      - name: Run tests
+        run: ./scripts/test
 
   build:
     if: (github.event_name == 'push' || github.event.pull_request.head.repo.fork) && (github.event_name != 'push' || github.event.head_commit.message != 'codegen metadata')
