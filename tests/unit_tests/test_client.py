@@ -3299,13 +3299,14 @@ def test_validate_api_key_if_hosted_without_tracing(
 
     ls_utils.get_env_var.cache_clear()
     with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
         client_cls(api_url="https://api.smith.langchain.com")
-        if len(w) != 0:
-            e = AssertionError(
-                f"Expected no warnings, but got: {[str(warning.message) for warning in w]}"
-            )
-            if "unclosed event loop" not in str(w[0].message):
-                raise e
+    # Other tests' background threads leak unrelated warnings (unclosed loop,
+    # blocked socket) into this window; only the API-key warning matters here.
+    missing_key = [
+        x for x in w if issubclass(x.category, ls_utils.LangSmithMissingAPIKeyWarning)
+    ]
+    assert not missing_key, [str(x.message) for x in missing_key]
 
 
 class TestResolveTracingMode:
