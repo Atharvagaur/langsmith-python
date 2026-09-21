@@ -24,7 +24,7 @@ permissions:
 jobs:
   benchmark:
     # Fork PRs would only burn a runner: PR runs report nothing (see below).
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    if: github.repository == 'langchain-ai/langsmith-python-staging' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -28,7 +28,7 @@ jobs:
   benchmark:
     name: "Python Benchmarks (${{ matrix.mode }})"
     # Same-repo PRs only: forks would pollute the baseline and reach the self-hosted runner.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    if: github.repository == 'langchain-ai/langsmith-python-staging' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)
     # CodSpeed's bare-metal runners; hosted runners swap CPU models between runs.
     runs-on: codspeed-macro
     timeout-minutes: 30
