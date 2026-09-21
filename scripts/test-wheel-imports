@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Build the wheel, install it with only its declared runtime deps, import it.
+# Catches a dependency that dev/test groups provide but pyproject forgets.
+
+set -e
+
+cd "$(dirname "$0")/.."
+
+VENV=$(mktemp -d)/venv
+trap 'rm -rf "$(dirname "$VENV")"' EXIT
+
+uv build --no-sources
+uv venv "$VENV"
+uv pip install dist/langsmith-*.whl --python "$VENV"
+"$VENV/bin/python" -c "
+from langsmith import Langsmith, _httpx
+from langsmith.client import Client
+assert _httpx.httpx.__name__ == 'httpx2', _httpx.httpx.__name__
+Langsmith(base_url='https://example.com', api_key='test').close()
+Client(api_url='https://example.com', api_key='test', auto_batch_tracing=False, info={}).close()
+print('wheel imports ok')
+"

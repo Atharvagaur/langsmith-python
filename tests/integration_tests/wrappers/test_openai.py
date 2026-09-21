@@ -315,6 +315,8 @@ def test_wrap_openai_chat_tokens(test_case):
     with langsmith.tracing_context(enabled=True):
         params: dict[str, Any] = test_case["params"].copy()
         params["langsmith_extra"] = {"on_end": collect}
+        if not test_case["expect_usage_metadata"] and os.environ.get("OPENAI_BASE_URL"):
+            pytest.skip("LLM gateway injects usage into responses OpenAI leaves bare")
         try:
             res = wrapped_oai_client.chat.completions.create(**params)
         except openai.APIConnectionError as e:
@@ -376,6 +378,8 @@ async def test_wrap_openai_chat_async_tokens(test_case):
     with langsmith.tracing_context(enabled=True):
         params: dict[str, Any] = test_case["params"].copy()
         params["langsmith_extra"] = {"on_end": collect}
+        if not test_case["expect_usage_metadata"] and os.environ.get("OPENAI_BASE_URL"):
+            pytest.skip("LLM gateway injects usage into responses OpenAI leaves bare")
         try:
             res = await wrapped_oai_client.chat.completions.create(**params)
         except openai.APIConnectionError:

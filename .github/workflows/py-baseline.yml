@@ -1,0 +1,40 @@
+name: py-baseline
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/langsmith/**"
+      - "bench/**"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: echo "SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: '0.10.2'
+          python-version: 3.11
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run benchmarks
+        run: |
+          mkdir -p out
+          uv run python -m bench -o out/benchmark-baseline.json --rigorous
+
+      - name: Save baseline
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          key: ${{ runner.os }}-benchmark-baseline-${{ env.SHA }}
+          path: out/benchmark-baseline.json
