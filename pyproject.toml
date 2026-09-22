@@ -426,6 +426,8 @@ warn_unreachable = false
 
 [tool.ruff]
 line-length = 120
+# notebooks are docs, not library code
+extend-exclude = ["examples/*.ipynb"]
 output-format = "grouped"
 target-version = "py310"
 

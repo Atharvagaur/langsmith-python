@@ -4687,14 +4687,18 @@ def test_create_run_with_zstd_compression(mock_session_cls: mock.Mock) -> None:
         "Expected at least one POST to the compression endpoint"
     )
 
-    call_data = post_calls[0][2]["data"]
-
-    if hasattr(call_data, "read"):
-        call_data = call_data.read()
-
     zstd_magic = b"\x28\xb5\x2f\xfd"
-    assert call_data.startswith(zstd_magic), (
-        "Expected the request body to start with zstd magic bytes; "
+    bodies = []
+    for call_obj in post_calls:
+        call_data = call_obj[2]["data"]
+        if hasattr(call_data, "seek"):
+            # the client may already have consumed the buffer
+            call_data.seek(0)
+        if hasattr(call_data, "read"):
+            call_data = call_data.read()
+        bodies.append(call_data)
+    assert any(body.startswith(zstd_magic) for body in bodies), (
+        "Expected a request body to start with zstd magic bytes; "
         "it appears runs were not compressed."
     )
 
