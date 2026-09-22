@@ -39,7 +39,7 @@ class TestOnlineEvaluators:
                 "code": "code",
                 "dependencies": "dependencies",
                 "language": "language",
-                "managed_code_evaluator_key": "managed_code_evaluator_key",
+                "managed_code_evaluator_key": "voice_metrics",
                 "managed_code_evaluator_settings": {
                     "foo": {
                         "is_enabled": True,
@@ -414,7 +414,7 @@ class TestAsyncOnlineEvaluators:
                 "code": "code",
                 "dependencies": "dependencies",
                 "language": "language",
-                "managed_code_evaluator_key": "managed_code_evaluator_key",
+                "managed_code_evaluator_key": "voice_metrics",
                 "managed_code_evaluator_settings": {
                     "foo": {
                         "is_enabled": True,
