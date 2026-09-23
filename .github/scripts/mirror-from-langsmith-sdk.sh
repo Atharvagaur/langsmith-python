@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Rewrite one langsmith-sdk commit for this repo and apply it with git apply --3way.
 # Usage: mirror-from-langsmith-sdk.sh <python|js> <sha> <this-checkout> [out-dir]
-# Run from a langsmith-sdk checkout. Writes summary.md + status (clean|conflict|noop) to out-dir.
+# Run from a langsmith-sdk checkout. Writes to out-dir: status (clean|conflict|noop) and
+# one-path-per-line lists manual, dropped, conflicts.
 set -euo pipefail
 lang=$1 sha=$2 staging=$(cd "$3" && pwd) out=${4:-$(mktemp -d)}
 mkdir -p "$out"; out=$(cd "$out" && pwd)
@@ -33,13 +34,12 @@ while IFS= read -r f; do
   fi
 done < <(git diff --name-only --no-renames "$sha^" "$sha" -- "$root")
 
-list() { if (($#)); then printf -- '- `%s`\n' "$@"; else echo "- none"; fi; }
+lines() { if (($#)); then printf '%s\n' "$@"; fi; }
 
-if ((${#rewrite[@]} == 0)); then
-  { echo "## Dropped (generated client, synced separately)"; list ${dropped[@]+"${dropped[@]}"}
-    echo; echo "## Needs manual port"; list ${manual[@]+"${manual[@]}"}; } > "$out/summary.md"
-  if ((${#manual[@]})); then echo manual > "$out/status"; else echo noop > "$out/status"; fi; exit 0
-fi
+lines ${dropped[@]+"${dropped[@]}"} > "$out/dropped"
+lines ${manual[@]+"${manual[@]}"} > "$out/manual"
+: > "$out/conflicts"
+if ((${#rewrite[@]} == 0)); then echo noop > "$out/status"; exit 0; fi
 
 git diff --binary --full-index --no-renames "$sha^" "$sha" -- "${rewrite[@]}" \
   | sed -E "/^(diff --git |--- |\+\+\+ |rename (from|to) |copy (from|to) )/ { $paths; }" \
@@ -66,13 +66,8 @@ done
 conflicts=()
 while IFS= read -r f; do [[ -n $f ]] && conflicts+=("$f"); done < <(git -C "$staging" diff --name-only --diff-filter=U)
 
-{
-  echo "## Rewritten"; list ${rewrite[@]+"${rewrite[@]}"}
-  echo; echo "## Dropped (generated client, synced separately)"; list ${dropped[@]+"${dropped[@]}"}
-  echo; echo "## Needs manual port"; list ${manual[@]+"${manual[@]}"}
-  if ((${#conflicts[@]})); then echo; echo "## Conflicts (markers left in place)"; list ${conflicts[@]+"${conflicts[@]}"}; fi
-  if ((${#failed[@]})); then echo; echo "## Failed to apply (see $lang.patch in the workflow artifact)"; list ${failed[@]+"${failed[@]}"}; fi
-} > "$out/summary.md"
+lines ${conflicts[@]+"${conflicts[@]}"} > "$out/conflicts"
+for f in ${failed[@]+"${failed[@]}"}; do echo "$f (not applied, patch in the run artifact)"; done >> "$out/conflicts"
 
 if ((${#conflicts[@]} + ${#failed[@]})); then echo conflict > "$out/status"
 elif git -C "$staging" diff --quiet HEAD; then echo noop > "$out/status"
