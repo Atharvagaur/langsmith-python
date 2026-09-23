@@ -366,6 +366,7 @@ class TestBoxes:
             sort_direction="sort_direction",
             sort_order="sort_order",
             status="status",
+            tag_value_id=["string"],
         )
         assert_matches_type(SyncItemsCursorGetPagination[SandboxResponse], box, path=["response"])
 
@@ -1197,6 +1198,7 @@ class TestAsyncBoxes:
             sort_direction="sort_direction",
             sort_order="sort_order",
             status="status",
+            tag_value_id=["string"],
         )
         assert_matches_type(AsyncItemsCursorGetPagination[SandboxResponse], box, path=["response"])
 
