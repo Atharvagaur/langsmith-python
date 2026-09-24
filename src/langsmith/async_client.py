@@ -636,7 +636,7 @@ class AsyncClient:
 
     @_deprecated(
         "read_run() is deprecated and will be removed after Jan 31, 2027. "
-        "Use client.runs.retrieve_v2() instead. "
+        "Use client.runs.retrieve() instead. "
         "See https://docs.langchain.com/langsmith/smithdb-sdk-migration"
         "#runs-retrieve for the migration guide."
     )
@@ -650,7 +650,7 @@ class AsyncClient:
 
         .. admonition:: Deprecated
 
-            Use :meth:`langsmith.AsyncClient.runs.retrieve_v2` instead.
+            Use :meth:`langsmith.AsyncClient.runs.retrieve` instead.
             See https://docs.langchain.com/langsmith/smithdb-sdk-migration-runs#runs-retrieve for the migration guide.
             Will be removed after Jan 31, 2027.
 
@@ -684,7 +684,7 @@ class AsyncClient:
 
     @_deprecated(
         "list_runs() is deprecated and will be removed after Jan 31, 2027. "
-        "Use client.runs.query_v2() instead. "
+        "Use client.runs.query() instead. "
         "See https://docs.langchain.com/langsmith/smithdb-sdk-migration"
         "#runs-query for the migration guide."
     )
@@ -715,7 +715,7 @@ class AsyncClient:
 
         .. admonition:: Deprecated
 
-            Use :meth:`langsmith.AsyncClient.runs.query_v2` instead.
+            Use :meth:`langsmith.AsyncClient.runs.query` instead.
             See https://docs.langchain.com/langsmith/smithdb-sdk-migration-query-runs#runs-query for the migration guide.
             Will be removed after Jan 31, 2027.
 
@@ -909,7 +909,7 @@ class AsyncClient:
 
     @_deprecated(
         "read_run_shared_link() is deprecated and will be removed after Jan 31, 2027. "
-        'Use client.runs.retrieve_v2(selects=["SHARE_URL"]) instead. '
+        'Use client.runs.retrieve(selects=["SHARE_URL"]) instead. '
         "See https://docs.langchain.com/langsmith/smithdb-sdk-migration"
         "#share-and-read-public-runs for the migration guide."
     )
@@ -918,7 +918,7 @@ class AsyncClient:
 
         .. admonition:: Deprecated
 
-            Use :meth:`langsmith.AsyncClient.runs.retrieve_v2` with ``selects=["SHARE_URL"]`` instead.
+            Use :meth:`langsmith.AsyncClient.runs.retrieve` with ``selects=["SHARE_URL"]`` instead.
             See https://docs.langchain.com/langsmith/smithdb-sdk-migration-feedback#share-and-read-public-runs for the migration guide.
             Will be removed after Jan 31, 2027.
 

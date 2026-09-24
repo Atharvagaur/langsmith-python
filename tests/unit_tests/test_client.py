@@ -7837,7 +7837,7 @@ def _share_response(run_id: uuid.UUID) -> mock.Mock:
         (
             "read_run_shared_link",
             False,
-            'Use client.runs.retrieve_v2(selects=["SHARE_URL"]) instead.',
+            'Use client.runs.retrieve(selects=["SHARE_URL"]) instead.',
         ),
         ("read_shared_run", True, "Use client.public.runs.retrieve() instead."),
         ("list_shared_runs", True, "Use client.public.runs.query() instead."),
@@ -7890,7 +7890,7 @@ def test_run_is_shared_does_not_warn_about_read_run_shared_link() -> None:
         ("share_run", "Use client.runs.share.create() instead."),
         (
             "read_run_shared_link",
-            'Use client.runs.retrieve_v2(selects=["SHARE_URL"]) instead.',
+            'Use client.runs.retrieve(selects=["SHARE_URL"]) instead.',
         ),
     ],
 )
