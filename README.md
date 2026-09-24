@@ -3,7 +3,13 @@
 [![Release Notes](https://img.shields.io/github/release/langchain-ai/langsmith-python?logo=python)](https://github.com/langchain-ai/langsmith-python/releases)
 [![Python Downloads](https://img.shields.io/pypi/dm/langsmith)](https://pypi.org/project/langsmith/)
 
+<<<<<<< HEAD
+The LangChain Python library provides convenient access to the LangChain REST API from any Python 3.10+
+application. The library includes type definitions for all request params and response fields,
+and offers both synchronous and asynchronous clients powered by [httpx](https://github.com/encode/httpx).
+=======
 This package contains the Python client for interacting with the [LangSmith platform](https://smith.langchain.com/).
+>>>>>>> 1af0533 (Apply custom code)
 
 To install:
 
