@@ -2,6 +2,15 @@ version = 1
 revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
+<<<<<<< HEAD
+    "python_full_version >= '3.14' and extra != 'group-9-langsmith-pydantic-v1' and extra == 'group-9-langsmith-pydantic-v2'",
+    "python_full_version >= '3.10' and python_full_version < '3.14' and extra != 'group-9-langsmith-pydantic-v1' and extra == 'group-9-langsmith-pydantic-v2'",
+    "python_full_version < '3.10' and extra != 'group-9-langsmith-pydantic-v1' and extra == 'group-9-langsmith-pydantic-v2'",
+    "python_full_version >= '3.10' and extra == 'group-9-langsmith-pydantic-v1' and extra != 'group-9-langsmith-pydantic-v2'",
+    "python_full_version < '3.10' and extra == 'group-9-langsmith-pydantic-v1' and extra != 'group-9-langsmith-pydantic-v2'",
+    "python_full_version >= '3.10' and extra != 'group-9-langsmith-pydantic-v1' and extra != 'group-9-langsmith-pydantic-v2'",
+    "python_full_version < '3.10' and extra != 'group-9-langsmith-pydantic-v1' and extra != 'group-9-langsmith-pydantic-v2'",
+=======
     "python_full_version >= '3.15' and sys_platform == 'emscripten'",
     "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
     "python_full_version >= '3.15' and sys_platform != 'emscripten'",
@@ -12,6 +21,7 @@ resolution-markers = [
     "python_full_version == '3.12.*' and sys_platform != 'emscripten'",
     "python_full_version == '3.11.*'",
     "python_full_version < '3.11'",
+>>>>>>> 1af0533 (Apply custom code)
 ]
 
 [[package]]
@@ -4295,6 +4305,16 @@ wheels = [
 name = "pydantic"
 version = "2.12.5"
 source = { registry = "https://pypi.org/simple" }
+<<<<<<< HEAD
+resolution-markers = [
+    "python_full_version >= '3.14' and extra != 'group-9-langsmith-pydantic-v1' and extra == 'group-9-langsmith-pydantic-v2'",
+    "python_full_version >= '3.10' and python_full_version < '3.14' and extra != 'group-9-langsmith-pydantic-v1' and extra == 'group-9-langsmith-pydantic-v2'",
+    "python_full_version < '3.10' and extra != 'group-9-langsmith-pydantic-v1' and extra == 'group-9-langsmith-pydantic-v2'",
+    "python_full_version >= '3.10' and extra != 'group-9-langsmith-pydantic-v1' and extra != 'group-9-langsmith-pydantic-v2'",
+    "python_full_version < '3.10' and extra != 'group-9-langsmith-pydantic-v1' and extra != 'group-9-langsmith-pydantic-v2'",
+]
+=======
+>>>>>>> 1af0533 (Apply custom code)
 dependencies = [
     { name = "annotated-types" },
     { name = "pydantic-core" },
