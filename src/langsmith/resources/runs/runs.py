@@ -365,6 +365,10 @@ class RunsResource(SyncAPIResource):
             cast_to=Run,
         )
 
+    retrieve = retrieve_v2
+
+    query = query_v2
+
 
 class AsyncRunsResource(AsyncAPIResource):
     @cached_property
@@ -695,6 +699,10 @@ class AsyncRunsResource(AsyncAPIResource):
             cast_to=Run,
         )
 
+    retrieve = retrieve_v2
+
+    query = query_v2
+
 
 class RunsResourceWithRawResponse:
     def __init__(self, runs: RunsResource) -> None:
@@ -708,6 +716,12 @@ class RunsResourceWithRawResponse:
         )
         self.retrieve_v2 = to_raw_response_wrapper(
             runs.retrieve_v2,
+        )
+        self.retrieve = to_raw_response_wrapper(
+            runs.retrieve,
+        )
+        self.query = to_raw_response_wrapper(
+            runs.query,
         )
 
     @cached_property
@@ -728,6 +742,12 @@ class AsyncRunsResourceWithRawResponse:
         self.retrieve_v2 = async_to_raw_response_wrapper(
             runs.retrieve_v2,
         )
+        self.retrieve = async_to_raw_response_wrapper(
+            runs.retrieve,
+        )
+        self.query = async_to_raw_response_wrapper(
+            runs.query,
+        )
 
     @cached_property
     def share(self) -> AsyncShareResourceWithRawResponse:
@@ -747,6 +767,12 @@ class RunsResourceWithStreamingResponse:
         self.retrieve_v2 = to_streamed_response_wrapper(
             runs.retrieve_v2,
         )
+        self.retrieve = to_streamed_response_wrapper(
+            runs.retrieve,
+        )
+        self.query = to_streamed_response_wrapper(
+            runs.query,
+        )
 
     @cached_property
     def share(self) -> ShareResourceWithStreamingResponse:
@@ -765,6 +791,12 @@ class AsyncRunsResourceWithStreamingResponse:
         )
         self.retrieve_v2 = async_to_streamed_response_wrapper(
             runs.retrieve_v2,
+        )
+        self.retrieve = async_to_streamed_response_wrapper(
+            runs.retrieve,
+        )
+        self.query = async_to_streamed_response_wrapper(
+            runs.query,
         )
 
     @cached_property
