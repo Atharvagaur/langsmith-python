@@ -6,15 +6,8 @@ cd "$(dirname "$0")/.."
 
 export DEFER_PYDANTIC_BUILD=false
 
-<<<<<<< HEAD
-# Note that we need to specify the patch version here so that uv
-# won't use unstable (alpha, beta, rc) releases for the tests
-PY_VERSION_MIN=">=3.10.0"
-PY_VERSION_MAX=">=3.14.0"
-=======
 # integration_tests / evaluation / external need a live deployment and API keys.
 TEST=${TEST:-"tests --ignore=tests/integration_tests --ignore=tests/evaluation --ignore=tests/external"}
->>>>>>> 1af0533 (Apply custom code)
 
 echo "==> Running tests"
 # shellcheck disable=SC2086
