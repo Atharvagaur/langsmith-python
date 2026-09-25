@@ -94,8 +94,8 @@ jobs:
             "$RUNNER_TEMP/mirror.sh" "$LANG_KEY" "$sha" "$staging" "$out"
             echo "$sha" > "$staging/.mirror-source-sha"
             {
-              # "(#123)" would link to this repo's PRs
-              printf '%s\n\n' "$(sed -E "s|\(#([0-9]+)\)$|($SOURCE_REPO#\1)|" <<<"$subject")"
+              # Explicit URLs keep release-please from linking to production issue numbers.
+              printf '%s\n\n' "$(sed -E "s|\(#([0-9]+)\)$|([langsmith-sdk PR \1](https://github.com/$SOURCE_REPO/pull/\1))|" <<<"$subject")"
               echo "Mirrored-From: $SOURCE_REPO@$sha"
               sed 's/^/Mirror-Conflict: /' "$out/conflicts"
               sed 's/^/Mirror-Manual-Port: /' "$out/manual"
