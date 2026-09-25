@@ -28,6 +28,10 @@ Example:
             print(result.stdout)
 """
 
+from langsmith.sandbox._access_delegation import (
+    AccessDelegation,
+    AccessDelegationMode,
+)
 from langsmith.sandbox._async_client import AsyncSandboxClient
 from langsmith.sandbox._async_sandbox import AsyncSandbox
 from langsmith.sandbox._client import SandboxClient
@@ -63,14 +67,24 @@ from langsmith.sandbox._models import (
     DownloadContentDisposition,
     DownloadURL,
     ExecutionResult,
+    FileChunk,
+    FileInfo,
+    FileStat,
+    GlobResult,
+    GrepMatch,
+    GrepResult,
     OutputChunk,
     ResourceStatus,
+    RunConfig,
+    ServiceAccess,
+    ServiceLoginURL,
     ServiceURL,
     Snapshot,
     SnapshotTag,
 )
 from langsmith.sandbox._mounts import (
     AWSMountAuthConfig,
+    AWSMountRoleAuthConfig,
     ContextHubMountConfig,
     ContextHubMountSpec,
     GCPMountAuthConfig,
@@ -114,8 +128,18 @@ __all__ = [
     # Models
     "ResourceStatus",
     "ExecutionResult",
+    "RunConfig",
     "Snapshot",
     "SnapshotTag",
+    # Filesystem models
+    "FileChunk",
+    "FileInfo",
+    "FileStat",
+    "GlobResult",
+    "GrepMatch",
+    "GrepResult",
+    "ServiceAccess",
+    "ServiceLoginURL",
     "ServiceURL",
     "DownloadURL",
     "DownloadContentDisposition",
@@ -124,6 +148,8 @@ __all__ = [
     "CommandHandle",
     "AsyncCommandHandle",
     "OutputChunk",
+    "AccessDelegation",
+    "AccessDelegationMode",
     "SandboxProxyConfig",
     "SandboxProxyRule",
     "SandboxProxySecret",
@@ -132,6 +158,7 @@ __all__ = [
     "SandboxMountAuthConfig",
     "SandboxMountConfig",
     "AWSMountAuthConfig",
+    "AWSMountRoleAuthConfig",
     "ContextHubMountConfig",
     "ContextHubMountSpec",
     "GCPMountAuthConfig",
