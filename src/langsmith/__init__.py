@@ -96,6 +96,7 @@ if TYPE_CHECKING:
     from langsmith._utils import file_from_path
 
 from ._version import __title__, __version__
+
 version = __version__  # for backwards compatibility
 
 # Metadata key to hide a traced run from LangSmith's Messages View.

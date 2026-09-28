@@ -145,9 +145,7 @@ def make_openai_case(variant: str, n: int):
 
 def make_anthropic_case(variant: str, n: int):
     client = wrap_anthropic(
-        anthropic.Anthropic(
-            api_key=FAKE_KEY, http_client=_CannedClient(_MESSAGE_RESPONSE)
-        ),
+        anthropic.Anthropic(api_key=FAKE_KEY, http_client=_CannedClient(_MESSAGE_RESPONSE)),
         tracing_extra={"client": _ls_for(variant)},
     )
     kwargs = {

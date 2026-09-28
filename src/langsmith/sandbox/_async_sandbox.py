@@ -183,9 +183,7 @@ class AsyncSandbox:
             mem_bytes=data.get("mem_bytes"),
             fs_capacity_bytes=data.get("fs_capacity_bytes"),
             run_config=_run_config_from_dict(data.get("run_config")),
-            access_delegation=_access_delegation_from_dict(
-                data.get("access_delegation")
-            ),
+            access_delegation=_access_delegation_from_dict(data.get("access_delegation")),
             _client=client,
             _auto_delete=auto_delete,
         )
@@ -546,9 +544,7 @@ class AsyncSandbox:
         """Execute via the SSE endpoints /execute/stream/{start,resume}."""
         from langsmith.uuid import uuid7
 
-        require_sse_supports(
-            pty=pty, close_stdin=close_stdin, kill_on_disconnect=kill_on_disconnect
-        )
+        require_sse_supports(pty=pty, close_stdin=close_stdin, kill_on_disconnect=kill_on_disconnect)
         dataplane_url = self._require_dataplane_url()
 
         # A client-supplied command_id makes start idempotent: the daemon does
@@ -703,9 +699,7 @@ class AsyncSandbox:
         except httpx.HTTPStatusError as e:
             handle_sandbox_http_error(e)
 
-    async def read(
-        self, path: str, *, timeout: int = 60, headers: RequestHeaders = None
-    ) -> bytes:
+    async def read(self, path: str, *, timeout: int = 60, headers: RequestHeaders = None) -> bytes:
         """Read a file from the sandbox asynchronously.
 
         Args:
@@ -746,9 +740,7 @@ class AsyncSandbox:
             # This line should never be reached but satisfies type checker
             raise  # pragma: no cover
 
-    async def stat(
-        self, path: str, *, timeout: int = 60, headers: RequestHeaders = None
-    ) -> FileStat:
+    async def stat(self, path: str, *, timeout: int = 60, headers: RequestHeaders = None) -> FileStat:
         """Report a file's size and validators without transferring it.
 
         Args:
@@ -818,9 +810,7 @@ class AsyncSandbox:
                 file (416).
             ResourceNotFoundError: If the file doesn't exist.
         """
-        range_header = _build_range_header(
-            start=start, end=end, suffix_bytes=suffix_bytes
-        )
+        range_header = _build_range_header(start=start, end=end, suffix_bytes=suffix_bytes)
         request_headers = dict(self._client._request_headers(headers) or {})
         request_headers["Range"] = range_header
         if if_range:
@@ -869,9 +859,7 @@ class AsyncSandbox:
         payload: dict[str, Any] = {"pattern": pattern, "path": path}
         if limit is not None:
             payload["limit"] = limit
-        data = await self._file_search(
-            "glob", payload, timeout=timeout, headers=headers
-        )
+        data = await self._file_search("glob", payload, timeout=timeout, headers=headers)
         return GlobResult.from_dict(data)
 
     async def ls(
@@ -927,9 +915,7 @@ class AsyncSandbox:
             payload["glob"] = glob
         if limit is not None:
             payload["limit"] = limit
-        data = await self._file_search(
-            "grep", payload, timeout=timeout, headers=headers
-        )
+        data = await self._file_search("grep", payload, timeout=timeout, headers=headers)
         return GrepResult.from_dict(data)
 
     async def _file_search(
@@ -990,13 +976,9 @@ class AsyncSandbox:
             SandboxNotReadyError: If sandbox is not ready.
         """
         if not 1 <= remote_port <= 65535:
-            raise ValueError(
-                f"remote_port must be between 1 and 65535 (got {remote_port})"
-            )
+            raise ValueError(f"remote_port must be between 1 and 65535 (got {remote_port})")
         if local_port and not 1 <= local_port <= 65535:
-            raise ValueError(
-                f"local_port must be between 1 and 65535 (got {local_port})"
-            )
+            raise ValueError(f"local_port must be between 1 and 65535 (got {local_port})")
         dataplane_url = self._require_dataplane_url()
         api_key = self._client._api_key
         t = AsyncTunnel(
@@ -1111,9 +1093,7 @@ class AsyncSandbox:
             ResourceTimeoutError: If sandbox doesn't become ready within timeout.
             SandboxClientError: For other errors.
         """
-        refreshed = await self._client.start_sandbox(
-            self.name, timeout=timeout, headers=headers
-        )
+        refreshed = await self._client.start_sandbox(self.name, timeout=timeout, headers=headers)
         self.status = refreshed.status
         self.dataplane_url = refreshed.dataplane_url
 

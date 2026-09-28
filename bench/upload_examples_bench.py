@@ -44,9 +44,7 @@ def create_example_data(dataset_id: str, json_size: int) -> Dict:
 DATASET_NAME = "upsert_llm_evaluator_benchmark_dataset"
 
 
-def benchmark_example_uploading(
-    num_examples: int, json_size: int, samples: int = 1
-) -> Dict:
+def benchmark_example_uploading(num_examples: int, json_size: int, samples: int = 1) -> Dict:
     """
     Benchmark run creation with specified parameters.
     Returns timing statistics.
@@ -64,9 +62,7 @@ def benchmark_example_uploading(
             description="Test dataset for multipart example upload",
             data_type=DataType.kv,
         )
-        examples = [
-            create_example_data(dataset.id, json_size) for i in range(num_examples)
-        ]
+        examples = [create_example_data(dataset.id, json_size) for i in range(num_examples)]
 
         # Old method
         old_start = time.perf_counter()
@@ -96,9 +92,7 @@ def benchmark_example_uploading(
         "new": {
             "mean": statistics.mean(multipart_timings),
             "median": statistics.median(multipart_timings),
-            "stdev": (
-                statistics.stdev(multipart_timings) if len(multipart_timings) > 1 else 0
-            ),
+            "stdev": (statistics.stdev(multipart_timings) if len(multipart_timings) > 1 else 0),
             "min": min(multipart_timings),
             "max": max(multipart_timings),
         },
@@ -113,23 +107,16 @@ def main(json_size: int, num_examples: int):
     """
     Run benchmarks with different combinations of parameters and report results.
     """
-    results = benchmark_example_uploading(
-        num_examples=num_examples, json_size=json_size
-    )
+    results = benchmark_example_uploading(num_examples=num_examples, json_size=json_size)
 
-    print(
-        f"\nBenchmark Results for {num_examples} examples with JSON size {json_size}:"
-    )
+    print(f"\nBenchmark Results for {num_examples} examples with JSON size {json_size}:")
     print("-" * 60)
     print(f"{'Metric':<15} {'Old Method':>20} {'New Method':>20}")
     print("-" * 60)
 
     metrics = ["mean", "median", "stdev", "min", "max"]
     for metric in metrics:
-        print(
-            f"{metric:<15} {results['old'][metric]:>20.4f} "
-            f"{results['new'][metric]:>20.4f}"
-        )
+        print(f"{metric:<15} {results['old'][metric]:>20.4f} {results['new'][metric]:>20.4f}")
 
     print("-" * 60)
     print(

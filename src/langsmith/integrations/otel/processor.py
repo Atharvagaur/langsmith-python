@@ -99,8 +99,7 @@ class OtelExporter(OTLPSpanExporter):
 
         if not api_key:
             raise ValueError(
-                "API key is required. Provide it via api_key parameter or "
-                "LANGSMITH_API_KEY environment variable."
+                "API key is required. Provide it via api_key parameter or LANGSMITH_API_KEY environment variable."
             )
 
         if not project:
@@ -179,9 +178,7 @@ class OtelSpanProcessor:
         if url:
             exporter_url = f"{url.rstrip('/')}/otel/v1/traces"
 
-        self._exporter = OtelExporter(
-            url=exporter_url, api_key=api_key, project=project, headers=headers
-        )
+        self._exporter = OtelExporter(url=exporter_url, api_key=api_key, project=project, headers=headers)
 
         # Create the processor chain
         if not OTEL_AVAILABLE:

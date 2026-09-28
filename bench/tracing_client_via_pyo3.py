@@ -40,16 +40,12 @@ def benchmark_run_creation(json_size, num_runs) -> None:
         api_key=api_key,
     )
 
-    project_name = "__tracing_client_bench_pyo3_" + datetime.now().strftime(
-        "%Y%m%dT%H%M%S"
-    )
+    project_name = "__tracing_client_bench_pyo3_" + datetime.now().strftime("%Y%m%dT%H%M%S")
 
     bench_start_time = datetime.now(timezone.utc)
 
     runs = [
-        create_run_data(
-            str(uuid4()), json_size, bench_start_time + timedelta(milliseconds=i * 2)
-        )
+        create_run_data(str(uuid4()), json_size, bench_start_time + timedelta(milliseconds=i * 2))
         for i in range(num_runs)
     ]
 

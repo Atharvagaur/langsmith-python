@@ -60,12 +60,23 @@ jobs:
       - name: Clone langsmith-sdk
         run: git clone --quiet "https://github.com/$SOURCE_REPO.git" ../langsmith-sdk
 
+      - name: Protect formatter dependency installs
+        uses: socketdev/action@ba6de6cc0565af1f42295590380973573297e31f
+        with:
+          mode: firewall-free
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: '0.10.2'
+
       - name: Append new commits to the mirror branch
         id: mirror
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           cp .github/scripts/mirror-from-langsmith-sdk.sh "$RUNNER_TEMP/mirror.sh"
+          cp .github/scripts/format-mirror.sh "$RUNNER_TEMP/format-mirror.sh"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -83,7 +94,7 @@ jobs:
             git checkout --quiet -B "$BRANCH" origin/main
           fi
 
-          staging=$PWD added=0 conflict=
+          staging=$PWD added=0 conflict= formatter_ready=false
           pointer=$(cat .mirror-source-sha)
           cd ../langsmith-sdk
           for sha in $(git log --reverse --format=%H "$pointer..origin/main" -- "$SOURCE_PATH"); do
@@ -92,6 +103,13 @@ jobs:
             case "$subject" in release\(*) continue ;; esac
             out=$RUNNER_TEMP/mirror-$sha
             "$RUNNER_TEMP/mirror.sh" "$LANG_KEY" "$sha" "$staging" "$out"
+            if [ "$(cat "$out/status")" = clean ]; then
+              if [ "$formatter_ready" = false ]; then
+                (cd "$staging" && uv sync --locked --group dev --group lint --no-install-project)
+                formatter_ready=true
+              fi
+              "$RUNNER_TEMP/format-mirror.sh" "$staging"
+            fi
             echo "$sha" > "$staging/.mirror-source-sha"
             {
               # Explicit URLs keep release-please from linking to production issue numbers.

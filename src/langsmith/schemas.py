@@ -95,9 +95,7 @@ class _AttachmentDict(TypedDict):
     data: Union[bytes, Path]
 
 
-_AttachmentLike = Union[
-    Attachment, _AttachmentDict, tuple[str, bytes], tuple[str, Path]
-]
+_AttachmentLike = Union[Attachment, _AttachmentDict, tuple[str, bytes], tuple[str, Path]]
 
 
 class ExampleCreate(BaseModel):
@@ -140,9 +138,7 @@ class Example(ExampleBase):
     """Example model."""
 
     id: UUID
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.fromtimestamp(0, tz=timezone.utc)
-    )
+    created_at: datetime = Field(default_factory=lambda: datetime.fromtimestamp(0, tz=timezone.utc))
     dataset_id: UUID = Field(default=UUID("00000000-0000-0000-0000-000000000000"))
     modified_at: Optional[datetime] = Field(default=None)
     source_run_id: Optional[UUID] = None
@@ -181,12 +177,8 @@ class Example(ExampleBase):
 class AttachmentsOperations(BaseModel):
     """Operations to perform on attachments."""
 
-    rename: dict[str, str] = Field(
-        default_factory=dict, description="Mapping of old attachment names to new names"
-    )
-    retain: list[str] = Field(
-        default_factory=list, description="List of attachment names to keep"
-    )
+    rename: dict[str, str] = Field(default_factory=dict, description="Mapping of old attachment names to new names")
+    retain: list[str] = Field(default_factory=list, description="List of attachment names to keep")
 
 
 class ExampleUpdate(BaseModel):
@@ -357,9 +349,7 @@ class RunBase(BaseModel):
     tags: Optional[list[str]] = None
     """Tags for categorizing or annotating the run."""
 
-    attachments: Union[Attachments, dict[str, AttachmentInfo]] = Field(
-        default_factory=dict
-    )
+    attachments: Union[Attachments, dict[str, AttachmentInfo]] = Field(default_factory=dict)
     """Attachments associated with the run.
 
     Each entry is a tuple of `(mime_type, bytes)`.
@@ -1576,9 +1566,7 @@ class _ClusterWithTraces:
         """Fetch run dicts for this cluster from the API."""
         client = getattr(self._report, "_client", None)
         if client is None:
-            raise ValueError(
-                "Report not attached to a client; get reports via Client.get_insights_report()"
-            )
+            raise ValueError("Report not attached to a client; get reports via Client.get_insights_report()")
         session_id = getattr(self._report, "_session_id", None)
         job_id = getattr(self._report, "_job_id", None)
         if session_id is None or job_id is None:
@@ -1611,9 +1599,7 @@ class _ClustersMap:
         else:
             by_name = {c.name: c for c in self._clusters}
             if key not in by_name:
-                raise KeyError(
-                    f"Cluster {key!r} not found; available: {list(by_name.keys())}"
-                )
+                raise KeyError(f"Cluster {key!r} not found; available: {list(by_name.keys())}")
             cluster = by_name[key]
         return _ClusterWithTraces(cluster, self._report)
 
@@ -1714,9 +1700,7 @@ class FeedbackFormulaCreate(BaseModel):
     session_id: Optional[UUID] = None
     feedback_key: str
     aggregation_type: Literal["sum", "avg"]
-    formula_parts: list[FeedbackFormulaWeightedVariable] = Field(
-        ..., min_length=1, max_length=50
-    )
+    formula_parts: list[FeedbackFormulaWeightedVariable] = Field(..., min_length=1, max_length=50)
 
 
 class FeedbackFormulaUpdate(BaseModel):
@@ -1732,9 +1716,7 @@ class FeedbackFormulaUpdate(BaseModel):
 
     feedback_key: str
     aggregation_type: Literal["sum", "avg"]
-    formula_parts: list[FeedbackFormulaWeightedVariable] = Field(
-        ..., min_length=1, max_length=50
-    )
+    formula_parts: list[FeedbackFormulaWeightedVariable] = Field(..., min_length=1, max_length=50)
 
 
 class FeedbackFormula(FeedbackFormulaCreate):

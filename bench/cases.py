@@ -63,9 +63,7 @@ BENCHMARKS = (
     (
         "dumps_class_nested_py_branch_and_leaf_200x400",
         lambda x: _dumps_json({"input": x}),
-        create_nested_instance(
-            200, 400, branch_constructor=MyClass, leaf_constructor=MyClass
-        ),
+        create_nested_instance(200, 400, branch_constructor=MyClass, leaf_constructor=MyClass),
     ),
     (
         "dumps_class_nested_py_leaf_50x100",

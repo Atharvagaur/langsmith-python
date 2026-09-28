@@ -280,9 +280,7 @@ def test_git_mount_rejects_invalid_remote_urls(remote_url: str) -> None:
         (None, 0),
     ],
 )
-def test_git_mount_rejects_invalid_ref_and_refresh_interval(
-    ref, refresh_interval_seconds
-) -> None:
+def test_git_mount_rejects_invalid_ref_and_refresh_interval(ref, refresh_interval_seconds) -> None:
     with pytest.raises(ValueError):
         git_mount(
             id="repo",
@@ -425,13 +423,7 @@ def test_proxy_config_ignores_deprecated_no_proxy() -> None:
 
 def test_proxy_config_rejects_gcp_auth_without_scopes() -> None:
     with pytest.raises(ValueError, match="scopes"):
-        proxy_config(
-            rules=[
-                gcp_auth(
-                    service_account_json=workspace_secret("GCP_SERVICE_ACCOUNT_JSON")
-                )
-            ]
-        )
+        proxy_config(rules=[gcp_auth(service_account_json=workspace_secret("GCP_SERVICE_ACCOUNT_JSON"))])
 
 
 def test_create_sandbox_forwards_composed_proxy_config(

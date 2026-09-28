@@ -55,9 +55,7 @@ def create_large_json(length: int) -> Dict:
     }
 
 
-def create_run_data(
-    run_id: str, json_size: int, start_time: Optional[datetime] = None
-) -> Dict:
+def create_run_data(run_id: str, json_size: int, start_time: Optional[datetime] = None) -> Dict:
     """Create a single run data object."""
     if start_time is None:
         start_time = datetime.now(timezone.utc)
@@ -111,9 +109,7 @@ def benchmark_run_creation(
     timings: list = []
     patch_timings: list = []
 
-    project_name = "__tracing_client_bench_python" + datetime.now().strftime(
-        "%Y%m%dT%H%M%S"
-    )
+    project_name = "__tracing_client_bench_python" + datetime.now().strftime("%Y%m%dT%H%M%S")
 
     for _ in range(samples):
         runs = [create_run_data(str(uuid4()), json_size) for i in range(num_runs)]
@@ -218,8 +214,6 @@ if __name__ == "__main__":
     on_mean = on["patch"]["mean"]
     saved = 100 * (1 - on_mean / off_mean)
     print("\nPatch-phase comparison:")
-    print(
-        f"exclude_inputs=False: {num_runs / off_mean:.2f} patches/s ({off_mean:.4f}s)"
-    )
+    print(f"exclude_inputs=False: {num_runs / off_mean:.2f} patches/s ({off_mean:.4f}s)")
     print(f"exclude_inputs=True:  {num_runs / on_mean:.2f} patches/s ({on_mean:.4f}s)")
     print(f"speedup: {off_mean / on_mean:.2f}x  ({saved:.1f}% faster)")

@@ -95,8 +95,7 @@ def _import_jwt() -> Any:
         from cryptography.hazmat.primitives.asymmetric import ed25519  # noqa: F401
     except ImportError as e:
         raise ImportError(
-            "Verifying sandbox tokens requires the sandbox-auth extra: "
-            'pip install "langsmith[sandbox-auth]"'
+            'Verifying sandbox tokens requires the sandbox-auth extra: pip install "langsmith[sandbox-auth]"'
         ) from e
     return jwt
 
@@ -194,9 +193,7 @@ class SandboxTokenVerifier:
         self._keys: Optional[PyJWKSet] = None
         self._fetched_at = 0.0
 
-    def verify_user_token(
-        self, token: str, *, audience: str, issuer: Optional[str] = None
-    ) -> SandboxUser:
+    def verify_user_token(self, token: str, *, audience: str, issuer: Optional[str] = None) -> SandboxUser:
         """Verify the ``X-Langsmith-User-Token`` header of a service URL request.
 
         LangSmith sets this header only for service URLs that use LangSmith
@@ -214,9 +211,7 @@ class SandboxTokenVerifier:
         kid = self._kid(token)
         return self._decode_user_token(token, self._key_sync(kid), audience, issuer)
 
-    async def averify_user_token(
-        self, token: str, *, audience: str, issuer: Optional[str] = None
-    ) -> SandboxUser:
+    async def averify_user_token(self, token: str, *, audience: str, issuer: Optional[str] = None) -> SandboxUser:
         """Async version of :meth:`verify_user_token`."""
         kid = self._kid(token)
         key = await self._key_async(kid)
@@ -266,9 +261,7 @@ class SandboxTokenVerifier:
         except self._jwt.PyJWTError as e:
             raise SandboxTokenVerificationError(f"malformed token: {e}") from e
         if header.get("alg") != "EdDSA":
-            raise SandboxTokenVerificationError(
-                f"unexpected signing algorithm: {header.get('alg')!r}"
-            )
+            raise SandboxTokenVerificationError(f"unexpected signing algorithm: {header.get('alg')!r}")
         kid = header.get("kid")
         if not isinstance(kid, str) or not kid:
             raise SandboxTokenVerificationError("token has no kid")
@@ -295,9 +288,7 @@ class SandboxTokenVerifier:
         except self._jwt.PyJWTError as e:
             raise SandboxTokenVerificationError(f"invalid token: {e}") from e
 
-    def _decode_user_token(
-        self, token: str, key: Any, audience: str, issuer: Optional[str]
-    ) -> SandboxUser:
+    def _decode_user_token(self, token: str, key: Any, audience: str, issuer: Optional[str]) -> SandboxUser:
         claims = self._decode(
             token,
             key,
@@ -357,9 +348,7 @@ class SandboxTokenVerifier:
 
     def _store(self, data: Any, now: float) -> Any:
         if not isinstance(data, dict) or not isinstance(data.get("keys"), list):
-            raise SandboxTokenVerificationError(
-                "invalid JWKS: expected an object with a keys array"
-            )
+            raise SandboxTokenVerificationError("invalid JWKS: expected an object with a keys array")
         usable = [k for k in data["keys"] if isinstance(k, dict)]
         try:
             keys = self._jwt.PyJWKSet.from_dict({"keys": usable})
@@ -383,9 +372,7 @@ class SandboxTokenVerifier:
                         resp.raise_for_status()
                         data = resp.json()
                     except (httpx.HTTPError, ValueError) as e:
-                        raise SandboxTokenVerificationError(
-                            f"failed to fetch JWKS from {self._jwks_url}: {e}"
-                        ) from e
+                        raise SandboxTokenVerificationError(f"failed to fetch JWKS from {self._jwks_url}: {e}") from e
                     key = _find_key(self._store(data, now), kid)
         return _require_key(key, kid)
 
@@ -410,9 +397,7 @@ class SandboxTokenVerifier:
                         resp.raise_for_status()
                         data = resp.json()
                     except (httpx.HTTPError, ValueError) as e:
-                        raise SandboxTokenVerificationError(
-                            f"failed to fetch JWKS from {self._jwks_url}: {e}"
-                        ) from e
+                        raise SandboxTokenVerificationError(f"failed to fetch JWKS from {self._jwks_url}: {e}") from e
                     key = _find_key(self._store(data, now), kid)
         return _require_key(key, kid)
 

@@ -26,9 +26,7 @@ client = wrap_openai(openai.Client())
 
 @traceable  # Auto-trace this function
 def pipeline(user_input: str):
-    result = client.chat.completions.create(
-        messages=[{"role": "user", "content": user_input}], model="gpt-5.4"
-    )
+    result = client.chat.completions.create(messages=[{"role": "user", "content": user_input}], model="gpt-5.4")
     return result.choices[0].message.content
 
 
@@ -372,17 +370,11 @@ parent_run.post()
 child_llm_run = parent_run.create_child(
     name="My Proprietary LLM",
     run_type="llm",
-    inputs={
-        "prompts": ["You are an AI Assistant. The time is XYZ. Summarize this morning's meetings."]
-    },
+    inputs={"prompts": ["You are an AI Assistant. The time is XYZ. Summarize this morning's meetings."]},
 )
 child_llm_run.post()
 child_llm_run.end(
-    outputs={
-        "generations": [
-            "I should use the transcript_loader tool to fetch meeting_transcripts from XYZ"
-        ]
-    }
+    outputs={"generations": ["I should use the transcript_loader tool to fetch meeting_transcripts from XYZ"]}
 )
 child_llm_run.patch()
 # ..  My Chat Bot takes the LLM output and calls

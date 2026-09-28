@@ -36,9 +36,7 @@ def _import_otel_client():
             BatchSpanProcessor,
         )
     except ImportError as e:
-        warnings.warn(
-            f"OTEL_ENABLED is set but OpenTelemetry packages are not installed: {e}"
-        )
+        warnings.warn(f"OTEL_ENABLED is set but OpenTelemetry packages are not installed: {e}")
         return None
 
 
@@ -84,10 +82,7 @@ def get_otlp_tracer_provider() -> "TracerProvider":
     headers_env = os.environ.get("OTEL_EXPORTER_OTLP_HEADERS")
     if headers_env:
         headers = {
-            k.strip(): v.strip()
-            for k, v in (
-                pair.split("=", 1) for pair in headers_env.split(",") if "=" in pair
-            )
+            k.strip(): v.strip() for k, v in (pair.split("=", 1) for pair in headers_env.split(",") if "=" in pair)
         }
     else:
         api_key = ls_utils.get_api_key(None) or ""

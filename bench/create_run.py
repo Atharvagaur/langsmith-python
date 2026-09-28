@@ -75,17 +75,11 @@ def create_runs(runs: list, client: Client) -> None:
 def process_queue(client: Client) -> None:
     if client.tracing_queue is None:
         raise ValueError("Tracing queue is None")
-    while next_batch := _tracing_thread_drain_queue(
-        client.tracing_queue, limit=100, block=False
-    ):
-        _tracing_thread_handle_batch(
-            client, client.tracing_queue, next_batch, use_multipart=True
-        )
+    while next_batch := _tracing_thread_drain_queue(client.tracing_queue, limit=100, block=False):
+        _tracing_thread_handle_batch(client, client.tracing_queue, next_batch, use_multipart=True)
 
 
-def benchmark_run_creation(
-    *, num_runs: int, json_size: int, samples: int, benchmark_thread: bool
-) -> Dict:
+def benchmark_run_creation(*, num_runs: int, json_size: int, samples: int, benchmark_thread: bool) -> Dict:
     """
     Benchmark run creation with specified parameters.
     Returns timing statistics.
@@ -131,9 +125,7 @@ def benchmark_run_creation(
     }
 
 
-def test_benchmark_runs(
-    *, json_size: int, num_runs: int, samples: int, benchmark_thread: bool
-):
+def test_benchmark_runs(*, json_size: int, num_runs: int, samples: int, benchmark_thread: bool):
     """
     Run benchmarks with different combinations of parameters and report results.
     """

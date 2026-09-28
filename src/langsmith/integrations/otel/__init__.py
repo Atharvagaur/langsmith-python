@@ -117,10 +117,7 @@ def get_langsmith_run_url_for_span(
     """
     client = client or Client()
     run_id = langsmith_run_id_from_otel_span_id(_extract_span_id(span))
-    return (
-        f"{client._host_url}/o/{client._get_tenant_id()}/projects/p/{project_id}/"
-        f"r/{run_id}?poll=true"
-    )
+    return f"{client._host_url}/o/{client._get_tenant_id()}/projects/p/{project_id}/r/{run_id}?poll=true"
 
 
 def configure(
@@ -163,9 +160,7 @@ def configure(
         provider = trace.get_tracer_provider()
 
         # Add LangSmith processor to existing provider
-        langsmith_processor = OtelSpanProcessor(
-            api_key="your-api-key", project="your-project"
-        )
+        langsmith_processor = OtelSpanProcessor(api_key="your-api-key", project="your-project")
         provider.add_span_processor(langsmith_processor)
         ```
 
@@ -217,9 +212,7 @@ def configure(
 
         from .processor import OtelSpanProcessor
 
-        processor = OtelSpanProcessor(
-            api_key=api_key, project=project_name, SpanProcessor=SpanProcessor
-        )
+        processor = OtelSpanProcessor(api_key=api_key, project=project_name, SpanProcessor=SpanProcessor)
         provider.add_span_processor(processor)  # type: ignore
         return True
     except Exception as e:

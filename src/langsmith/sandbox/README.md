@@ -147,9 +147,7 @@ client = SandboxClient()
 auth_config = proxy_config(
     rules=[
         gcp_auth(
-            service_account_json=workspace_secret(
-                "SANDBOX_GCP_SERVICE_ACCOUNT_JSON"
-            ),
+            service_account_json=workspace_secret("SANDBOX_GCP_SERVICE_ACCOUNT_JSON"),
             scopes=["https://www.googleapis.com/auth/devstorage.read_write"],
         )
     ],
@@ -226,13 +224,7 @@ from langsmith.sandbox import (
 )
 
 mount_cfg = mount_config(
-    auth=[
-        gcp_auth(
-            service_account_json=workspace_secret(
-                "SANDBOX_GCP_SERVICE_ACCOUNT_JSON"
-            )
-        )
-    ],
+    auth=[gcp_auth(service_account_json=workspace_secret("SANDBOX_GCP_SERVICE_ACCOUNT_JSON"))],
     mounts=[
         gcs_mount(
             id="customer_data",
@@ -303,6 +295,7 @@ mount_cfg = mount_config(
     ],
 )
 
+
 async def main():
     async with AsyncSandboxClient() as client:
         async with await client.sandbox(
@@ -336,11 +329,7 @@ mount_cfg = mount_config(
             access_key_id=workspace_secret("SANDBOX_AWS_ACCESS_KEY_ID"),
             secret_access_key=workspace_secret("SANDBOX_AWS_SECRET_ACCESS_KEY"),
         ),
-        gcp_auth(
-            service_account_json=workspace_secret(
-                "SANDBOX_GCP_SERVICE_ACCOUNT_JSON"
-            )
-        ),
+        gcp_auth(service_account_json=workspace_secret("SANDBOX_GCP_SERVICE_ACCOUNT_JSON")),
     ],
     mounts=[
         s3_mount(
@@ -369,14 +358,14 @@ with client.sandbox(snapshot_id=snapshot_id) as sb:
     # Run a command
     result = sb.run("echo 'Hello, World!'")
 
-    print(result.stdout)     # "Hello, World!\n"
-    print(result.stderr)     # ""
+    print(result.stdout)  # "Hello, World!\n"
+    print(result.stderr)  # ""
     print(result.exit_code)  # 0
-    print(result.success)    # True
+    print(result.success)  # True
 
     # Commands that fail return non-zero exit codes
     result = sb.run("exit 1")
-    print(result.success)    # False
+    print(result.success)  # False
     print(result.exit_code)  # 1
 ```
 
@@ -449,7 +438,7 @@ with client.sandbox(snapshot_id=snapshot_id) as sb:
 ```python
 with client.sandbox(snapshot_id=snapshot_id) as sb:
     handle = sb.run(
-        "python -c 'name = input(\"Name: \"); print(f\"Hello {name}\")'",
+        'python -c \'name = input("Name: "); print(f"Hello {name}")\'',
         timeout=30,
         wait=False,
     )
@@ -603,9 +592,9 @@ with client.sandbox(snapshot_id=snapshot_id) as sb:
     # Long-running task: 30-min idle timeout, 1-hour session TTL
     handle = sb.run(
         "python train.py",
-        timeout=0,              # No command timeout
-        idle_timeout=1800,      # Kill after 30min with no clients
-        ttl_seconds=3600,       # Keep session for 1 hour after exit
+        timeout=0,  # No command timeout
+        idle_timeout=1800,  # Kill after 30min with no clients
+        ttl_seconds=3600,  # Keep session for 1 hour after exit
         wait=False,
     )
 
@@ -613,8 +602,8 @@ with client.sandbox(snapshot_id=snapshot_id) as sb:
     handle = sb.run(
         "python background_job.py",
         timeout=0,
-        idle_timeout=-1,        # Never kill due to idle
-        ttl_seconds=-1,         # Keep session forever
+        idle_timeout=-1,  # Never kill due to idle
+        ttl_seconds=-1,  # Keep session forever
         wait=False,
     )
 ```
@@ -698,7 +687,9 @@ pg_handle = sb.run(
     timeout=0,
     wait=False,
 )
-import time; time.sleep(6)  # wait for Postgres to initialize and start
+import time
+
+time.sleep(6)  # wait for Postgres to initialize and start
 
 try:
     with sb.tunnel(remote_port=5432, local_port=25432) as t:
@@ -746,11 +737,14 @@ Works with any TCP service. Start long-running services with `wait=False` and
 ```python
 sb = client.create_sandbox(snapshot_id=snapshot_id)
 http_handle = sb.run("python3 -m http.server 3000", timeout=0, wait=False)
-import time; time.sleep(2)
+import time
+
+time.sleep(2)
 
 try:
     with sb.tunnel(remote_port=3000, local_port=13000) as t:
         import urllib.request
+
         resp = urllib.request.urlopen(f"http://127.0.0.1:{t.local_port}/")
         print(resp.status)  # 200
 finally:
@@ -764,10 +758,11 @@ Open several tunnels simultaneously to different services:
 
 ```python
 http_handle2 = sb.run("python3 -m http.server 3001", timeout=0, wait=False)
-import time; time.sleep(1)
+import time
 
-with sb.tunnel(remote_port=3000, local_port=23000) as t1, \
-     sb.tunnel(remote_port=3001, local_port=23001) as t2:
+time.sleep(1)
+
+with sb.tunnel(remote_port=3000, local_port=23000) as t1, sb.tunnel(remote_port=3001, local_port=23001) as t2:
     resp1 = urllib.request.urlopen(f"http://127.0.0.1:{t1.local_port}/")
     resp2 = urllib.request.urlopen(f"http://127.0.0.1:{t2.local_port}/")
 
@@ -808,7 +803,9 @@ for you.
 with client.sandbox(snapshot_id=snapshot_id) as sb:
     # Start a web server inside the sandbox
     handle = sb.run("python -m http.server 3000", timeout=0, wait=False)
-    import time; time.sleep(2)
+    import time
+
+    time.sleep(2)
 
     # Get a service URL for port 3000
     svc = sb.service(port=3000)
@@ -821,7 +818,7 @@ with client.sandbox(snapshot_id=snapshot_id) as sb:
     resp = svc.post("/api/data", json={"key": "value"})
 
     # Access the raw token or URLs directly
-    print(svc.token)        # JWT (auto-refreshes near expiry)
+    print(svc.token)  # JWT (auto-refreshes near expiry)
     print(svc.service_url)  # base URL for programmatic access
     print(svc.browser_url)  # URL that sets a cookie in a browser
 
@@ -1105,9 +1102,9 @@ sb = client.create_sandbox(
 )
 
 # Inspect retention settings
-print(sb.idle_ttl_seconds)            # e.g. 300
-print(sb.delete_after_stop_seconds)   # e.g. 3600
-print(sb.stopped_at)                  # None while running, ISO timestamp once stopped
+print(sb.idle_ttl_seconds)  # e.g. 300
+print(sb.delete_after_stop_seconds)  # e.g. 3600
+print(sb.stopped_at)  # None while running, ISO timestamp once stopped
 ```
 
 ### Updating retention on existing sandboxes
@@ -1197,6 +1194,7 @@ Full async support for all operations:
 ```python
 from langsmith.sandbox import AsyncSandboxClient
 
+
 async def main():
     async with AsyncSandboxClient() as client:
         # Build a snapshot first
@@ -1234,18 +1232,18 @@ The module provides type-based exceptions with a `resource_type` attribute for s
 
 ```python
 from langsmith.sandbox import (
-    SandboxClientError,       # Base exception for all sandbox errors
-    ResourceCreationError,    # Resource provisioning failed (check resource_type, error_type)
-    ResourceNotFoundError,    # Resource doesn't exist (check resource_type)
-    ResourceTimeoutError,     # Operation timed out (check resource_type)
-    SandboxNotReadyError,     # Sandbox not ready for operations yet
-    SandboxConnectionError,   # Network/WebSocket error
-    CommandTimeoutError,      # Command exceeded its timeout (extends SandboxOperationError)
-    QuotaExceededError,       # Quota limit reached
-    TunnelError,              # Base for tunnel errors
-    TunnelPortNotAllowedError,       # Port blocked by daemon allowlist
-    TunnelConnectionRefusedError,    # Nothing listening on remote port
-    TunnelUnsupportedVersionError,   # Client/daemon protocol mismatch
+    SandboxClientError,  # Base exception for all sandbox errors
+    ResourceCreationError,  # Resource provisioning failed (check resource_type, error_type)
+    ResourceNotFoundError,  # Resource doesn't exist (check resource_type)
+    ResourceTimeoutError,  # Operation timed out (check resource_type)
+    SandboxNotReadyError,  # Sandbox not ready for operations yet
+    SandboxConnectionError,  # Network/WebSocket error
+    CommandTimeoutError,  # Command exceeded its timeout (extends SandboxOperationError)
+    QuotaExceededError,  # Quota limit reached
+    TunnelError,  # Base for tunnel errors
+    TunnelPortNotAllowedError,  # Port blocked by daemon allowlist
+    TunnelConnectionRefusedError,  # Nothing listening on remote port
+    TunnelUnsupportedVersionError,  # Client/daemon protocol mismatch
 )
 
 try:

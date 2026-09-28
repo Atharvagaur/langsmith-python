@@ -26,9 +26,7 @@ def resolve_pair(
     """
     return (
         agent_id if agent_id is not None else utils.get_tracer_agent_id(),
-        agent_environment
-        if agent_environment is not None
-        else utils.get_tracer_agent_environment(),
+        agent_environment if agent_environment is not None else utils.get_tracer_agent_environment(),
     )
 
 
@@ -249,9 +247,7 @@ def apply_to_payload(payload: dict, *, update: bool = False) -> None:
     """
     agent_id = payload.pop("agent_id", None)
     agent_environment = payload.pop("agent_environment", None)
-    named_project = (
-        payload.get("session_id") is not None or payload.get("session_name") is not None
-    )
+    named_project = payload.get("session_id") is not None or payload.get("session_name") is not None
     if not (update or named_project):
         # A patch inherits its post's target, and a project already on the
         # payload addresses the run on its own; neither consults the

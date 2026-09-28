@@ -28,9 +28,7 @@ def get_request_hash(request):
 
         body_json = json.loads(body_str)
 
-        key_elements = {
-            k: v for k, v in body_json.items() if k in ("model", "messages", "tools")
-        }
+        key_elements = {k: v for k, v in body_json.items() if k in ("model", "messages", "tools")}
         # Hash the key elements
         hash_input = json.dumps(key_elements, sort_keys=True)
         return hashlib.md5(hash_input.encode()).hexdigest()
@@ -73,9 +71,7 @@ def custom_request_matcher(r1, r2):
 
 def pytest_addoption(parser):
     """Pytest options."""
-    parser.addoption(
-        "--runslow", action="store_true", default=False, help="run slow tests"
-    )
+    parser.addoption("--runslow", action="store_true", default=False, help="run slow tests")
     parser.addoption(
         "--vcr-mode",
         type=str,
@@ -98,17 +94,13 @@ def pytest_collection_modifyitems(config, items):
         return
 
     if shard_index_raw is None:
-        raise pytest.UsageError(
-            "PYTEST_SHARD_INDEX must be set if PYTEST_SHARD_TOTAL is set"
-        )
+        raise pytest.UsageError("PYTEST_SHARD_INDEX must be set if PYTEST_SHARD_TOTAL is set")
 
     try:
         shard_total = int(shard_total_raw)
         shard_index = int(shard_index_raw)
     except ValueError as e:
-        raise pytest.UsageError(
-            "PYTEST_SHARD_TOTAL and PYTEST_SHARD_INDEX must be integers"
-        ) from e
+        raise pytest.UsageError("PYTEST_SHARD_TOTAL and PYTEST_SHARD_INDEX must be integers") from e
 
     if shard_total <= 1:
         return
@@ -147,9 +139,7 @@ def filter_request_data(request):
                 body_str = request.body
 
             # Replace API keys and other sensitive data
-            body_str = re.sub(
-                r'(api[-_]?key"?\s*:\s*")\w+(")', r"\1FILTERED\2", body_str
-            )
+            body_str = re.sub(r'(api[-_]?key"?\s*:\s*")\w+(")', r"\1FILTERED\2", body_str)
             body_str = re.sub(r"(Bearer\s+)[A-Za-z0-9-_]+", r"\1FILTERED", body_str)
 
             # Update the request body

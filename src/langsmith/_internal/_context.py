@@ -13,24 +13,18 @@ else:
 
 _PROJECT_NAME = contextvars.ContextVar[Optional[str]]("_PROJECT_NAME", default=None)
 _AGENT_ID = contextvars.ContextVar[Optional[str]]("_AGENT_ID", default=None)
-_AGENT_ENVIRONMENT = contextvars.ContextVar[Optional[str]](
-    "_AGENT_ENVIRONMENT", default=None
-)
+_AGENT_ENVIRONMENT = contextvars.ContextVar[Optional[str]]("_AGENT_ENVIRONMENT", default=None)
 _TAGS = contextvars.ContextVar[Optional[list[str]]]("_TAGS", default=None)
 _METADATA = contextvars.ContextVar[Optional[dict[str, Any]]]("_METADATA", default=None)
 
-_TRACING_ENABLED = contextvars.ContextVar[Optional[Union[bool, Literal["local"]]]](
-    "_TRACING_ENABLED", default=None
-)
+_TRACING_ENABLED = contextvars.ContextVar[Optional[Union[bool, Literal["local"]]]]("_TRACING_ENABLED", default=None)
 _CLIENT = contextvars.ContextVar[Optional["Client"]]("_CLIENT", default=None)
 
 # Store a weak reference to the RunTree in the context.
 # This prevents memory leaks when contexts are captured by asyncio operations
 # (call_later, create_task, etc.) — the captured context holds only a weakref,
 # and the RunTree can be GC'd once no strong references remain.
-_PARENT_RUN_TREE_REF = contextvars.ContextVar[Optional[weakref.ref["RunTree"]]](
-    "_PARENT_RUN_TREE_REF", default=None
-)
+_PARENT_RUN_TREE_REF = contextvars.ContextVar[Optional[weakref.ref["RunTree"]]]("_PARENT_RUN_TREE_REF", default=None)
 
 
 def get_current_run_tree() -> Optional["RunTree"]:

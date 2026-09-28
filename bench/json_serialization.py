@@ -132,10 +132,7 @@ def main():
         #     for _ in range(num_json_objects)
         # ]
 
-        print(
-            f"\nBenchmarking {func.__name__} with {num_json_objects} JSON objects "
-            f"of length {json_length}..."
-        )
+        print(f"\nBenchmarking {func.__name__} with {num_json_objects} JSON objects of length {json_length}...")
         results_seq = (
             benchmark_serialization(data, func)
             if not func.__name__.startswith("gzip")

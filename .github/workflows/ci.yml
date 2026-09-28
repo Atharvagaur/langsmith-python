@@ -48,6 +48,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev --group lint --extra aiohttp
 
+      - name: Test mirror formatting
+        run: .github/scripts/test-format-mirror.sh
+
       - name: Run lints
         run: ./scripts/lint
 

@@ -201,9 +201,7 @@ def serialize_feedback_dict(
     )
 
 
-def serialize_run_dict(
-    operation: Literal["post", "patch"], payload: dict
-) -> SerializedRunOperation:
+def serialize_run_dict(operation: Literal["post", "patch"], payload: dict) -> SerializedRunOperation:
     inputs = payload.pop("inputs", None)
     outputs = payload.pop("outputs", None)
     events = payload.pop("events", None)
@@ -229,14 +227,8 @@ def serialize_run_dict(
 def combine_serialized_queue_operations(
     ops: list[Union[SerializedRunOperation, SerializedFeedbackOperation]],
 ) -> list[Union[SerializedRunOperation, SerializedFeedbackOperation]]:
-    create_ops_by_id = {
-        op.id: op
-        for op in ops
-        if isinstance(op, SerializedRunOperation) and op.operation == "post"
-    }
-    passthrough_ops: list[
-        Union[SerializedRunOperation, SerializedFeedbackOperation]
-    ] = []
+    create_ops_by_id = {op.id: op for op in ops if isinstance(op, SerializedRunOperation) and op.operation == "post"}
+    passthrough_ops: list[Union[SerializedRunOperation, SerializedFeedbackOperation]] = []
     for op in ops:
         if isinstance(op, SerializedRunOperation):
             if op.operation == "post":
@@ -253,9 +245,7 @@ def combine_serialized_queue_operations(
                 # TODO optimize this more - this would currently be slowest
                 # for large payloads
                 create_op_dict = _orjson.loads(create_op._none)
-                op_dict = {
-                    k: v for k, v in _orjson.loads(op._none).items() if v is not None
-                }
+                op_dict = {k: v for k, v in _orjson.loads(op._none).items() if v is not None}
                 create_op_dict.update(op_dict)
                 create_op._none = _orjson.dumps(create_op_dict)
 
@@ -366,9 +356,7 @@ def serialized_run_operation_to_multipart_parts_and_context(
                     file_size = os.path.getsize(data_or_path)
                     file = open(data_or_path, "rb")
                 except FileNotFoundError:
-                    logger.warning(
-                        "Attachment file not found for run %s: %s", op.id, data_or_path
-                    )
+                    logger.warning("Attachment file not found for run %s: %s", op.id, data_or_path)
                     continue
                 opened_files_dict[str(data_or_path) + str(uuid.uuid4())] = file
                 acc_parts.append(
@@ -428,14 +416,10 @@ def compress_multipart_parts_and_context(
     parts: list[tuple[bytes, bytes]] = []
     op_uncompressed_size = 0
 
-    for headers, data in encode_multipart_parts_and_context(
-        parts_and_context, boundary
-    ):
+    for headers, data in encode_multipart_parts_and_context(parts_and_context, boundary):
         # Normalise to bytes
         if not isinstance(data, (bytes, bytearray)):
-            data = (
-                data.read() if isinstance(data, BufferedReader) else str(data).encode()
-            )
+            data = data.read() if isinstance(data, BufferedReader) else str(data).encode()
 
         parts.append((headers, data))
         op_uncompressed_size += len(data)
@@ -446,9 +430,7 @@ def compress_multipart_parts_and_context(
         if current_size > 0 and current_size + op_uncompressed_size > max_bytes:
             from langsmith.client import _log_tracing_drop
 
-            _log_tracing_drop(
-                f"compressed traces buffer full ({current_size}/{max_bytes} bytes)"
-            )
+            _log_tracing_drop(f"compressed traces buffer full ({current_size}/{max_bytes} bytes)")
             return False
 
     for headers, data in parts:

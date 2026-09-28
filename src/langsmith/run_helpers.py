@@ -138,9 +138,7 @@ def set_run_metadata(**metadata: Any) -> None:
     """Update metadata on the current run tree."""
     run_tree = get_current_run_tree()
     if run_tree is None:
-        LOGGER.warning(
-            "No active run tree found. Call `set_run_metadata` inside a traced run."
-        )
+        LOGGER.warning("No active run tree found. Call `set_run_metadata` inside a traced run.")
     else:
         run_tree.metadata.update(metadata)
     return
@@ -242,9 +240,7 @@ def tracing_context(
         agent_environment=agent_environment,
     )
     parent_run = (
-        _get_parent_run(
-            {"parent": parent or kwargs.get("parent_run"), "replicas": replicas}
-        )
+        _get_parent_run({"parent": parent or kwargs.get("parent_run"), "replicas": replicas})
         if parent is not False
         else None
     )
@@ -577,9 +573,7 @@ def traceable(
         !!! example "Logging with custom metadata and tags"
 
             ```python
-            @traceable(
-                metadata={"version": "1.0", "author": "John Doe"}, tags=["beta", "test"]
-            )
+            @traceable(metadata={"version": "1.0", "author": "John Doe"}, tags=["beta", "test"])
             def tagged_function(x):
                 return x**2
 
@@ -627,11 +621,7 @@ def traceable(
     """
     run_type = cast(
         ls_client.RUN_TYPE_T,
-        (
-            args[0]
-            if args and isinstance(args[0], str)
-            else (kwargs.pop("run_type", None) or "chain")
-        ),
+        (args[0] if args and isinstance(args[0], str) else (kwargs.pop("run_type", None) or "chain")),
     )
     if run_type not in _VALID_RUN_TYPES:
         warnings.warn(
@@ -646,8 +636,7 @@ def traceable(
         )
     if "extra" in kwargs:
         warnings.warn(
-            "The `extra` keyword argument is deprecated. Please use `metadata` "
-            "instead.",
+            "The `extra` keyword argument is deprecated. Please use `metadata` instead.",
             DeprecationWarning,
         )
     reduce_fn = kwargs.pop("reduce_fn", None)
@@ -683,8 +672,7 @@ def traceable(
 
     if kwargs:
         warnings.warn(
-            f"The following keyword arguments are not recognized and will be ignored: "
-            f"{sorted(kwargs.keys())}.",
+            f"The following keyword arguments are not recognized and will be ignored: {sorted(kwargs.keys())}.",
             DeprecationWarning,
         )
 
@@ -717,9 +705,7 @@ def traceable(
                 if func_accepts_parent_run:
                     kwargs["run_tree"] = run_container["new_run"]
 
-                otel_context_manager = _maybe_create_otel_context(
-                    run_container["new_run"]
-                )
+                otel_context_manager = _maybe_create_otel_context(run_container["new_run"])
                 use_ctx_task = accepts_context and not _runtime_override_active()
                 if otel_context_manager:
 
@@ -732,9 +718,7 @@ def traceable(
                             run_with_otel_context(), context=run_container["context"]
                         )
                     else:
-                        with tracing_context(
-                            **get_tracing_context(run_container["context"])
-                        ):
+                        with tracing_context(**get_tracing_context(run_container["context"])):
                             function_result = await run_with_otel_context()
                 else:
                     fr_coro = func(*args, **kwargs)
@@ -743,22 +727,14 @@ def traceable(
                             fr_coro, context=run_container["context"]
                         )
                     else:
-                        with tracing_context(
-                            **get_tracing_context(run_container["context"])
-                        ):
+                        with tracing_context(**get_tracing_context(run_container["context"])):
                             function_result = await fr_coro
             except BaseException as e:
                 # shield from cancellation, given we're catching all exceptions
                 _cleanup_traceback(e)
-                await asyncio.shield(
-                    aitertools.aio_to_thread(
-                        copy_context(), _on_run_end, run_container, error=e
-                    )
-                )
+                await asyncio.shield(aitertools.aio_to_thread(copy_context(), _on_run_end, run_container, error=e))
                 raise
-            await aitertools.aio_to_thread(
-                copy_context(), _on_run_end, run_container, outputs=function_result
-            )
+            await aitertools.aio_to_thread(copy_context(), _on_run_end, run_container, outputs=function_result)
             return function_result
 
         @functools.wraps(func)
@@ -784,9 +760,7 @@ def traceable(
                     # called mid-generation. Need to explicitly accept run_tree to get
                     # around this.
 
-                otel_context_manager = _maybe_create_otel_context(
-                    run_container["new_run"]
-                )
+                otel_context_manager = _maybe_create_otel_context(run_container["new_run"])
 
                 async_gen_result = func(*args, **kwargs)
                 # Can't iterate through if it's a coroutine
@@ -794,23 +768,15 @@ def traceable(
                 use_ctx_task = accepts_context and not _runtime_override_active()
                 if inspect.iscoroutine(async_gen_result):
                     if use_ctx_task:
-                        async_gen_result = await asyncio.create_task(
-                            async_gen_result, context=run_container["context"]
-                        )  # type: ignore
+                        async_gen_result = await asyncio.create_task(async_gen_result, context=run_container["context"])  # type: ignore
                     else:
-                        with tracing_context(
-                            **get_tracing_context(run_container["context"])
-                        ):
+                        with tracing_context(**get_tracing_context(run_container["context"])):
                             async_gen_result = await async_gen_result
 
                 async for item in _process_async_iterator(
                     generator=async_gen_result,
                     run_container=run_container,
-                    is_llm_run=(
-                        run_container["new_run"].run_type == "llm"
-                        if run_container["new_run"]
-                        else False
-                    ),
+                    is_llm_run=(run_container["new_run"].run_type == "llm" if run_container["new_run"] else False),
                     accepts_context=use_ctx_task,
                     results=results,
                     process_chunk=container_input.get("process_chunk"),
@@ -852,29 +818,21 @@ def traceable(
                 args=args,
                 kwargs=kwargs,
             )
-            func_accepts_parent_run = (
-                inspect.signature(func).parameters.get("run_tree", None) is not None
-            )
+            func_accepts_parent_run = inspect.signature(func).parameters.get("run_tree", None) is not None
             try:
                 if func_accepts_parent_run:
                     kwargs["run_tree"] = run_container["new_run"]
 
-                otel_context_manager = _maybe_create_otel_context(
-                    run_container["new_run"]
-                )
+                otel_context_manager = _maybe_create_otel_context(run_container["new_run"])
                 if otel_context_manager:
 
                     def run_with_otel_context():
                         with otel_context_manager:
                             return func(*args, **kwargs)
 
-                    function_result = run_container["context"].run(
-                        run_with_otel_context
-                    )
+                    function_result = run_container["context"].run(run_with_otel_context)
                 else:
-                    function_result = run_container["context"].run(
-                        func, *args, **kwargs
-                    )
+                    function_result = run_container["context"].run(func, *args, **kwargs)
             except BaseException as e:
                 _cleanup_traceback(e)
                 _on_run_end(run_container, error=e)
@@ -883,9 +841,7 @@ def traceable(
             return function_result
 
         @functools.wraps(func)
-        def generator_wrapper(
-            *args: Any, langsmith_extra: Optional[LangSmithExtra] = None, **kwargs: Any
-        ) -> Any:
+        def generator_wrapper(*args: Any, langsmith_extra: Optional[LangSmithExtra] = None, **kwargs: Any) -> Any:
             if not func_accepts_config:
                 kwargs.pop("config", None)
             run_container = _setup_run(
@@ -895,9 +851,7 @@ def traceable(
                 args=args,
                 kwargs=kwargs,
             )
-            func_accepts_parent_run = (
-                inspect.signature(func).parameters.get("run_tree", None) is not None
-            )
+            func_accepts_parent_run = inspect.signature(func).parameters.get("run_tree", None) is not None
             results: list[Any] = []
             function_return: Any = None
 
@@ -907,9 +861,7 @@ def traceable(
 
                 generator_result = run_container["context"].run(func, *args, **kwargs)
 
-                otel_context_manager = _maybe_create_otel_context(
-                    run_container["new_run"]
-                )
+                otel_context_manager = _maybe_create_otel_context(run_container["new_run"])
 
                 function_return = yield from _process_iterator(
                     generator_result,
@@ -939,9 +891,7 @@ def traceable(
         # are functions that return iterable responses and should not be
         # considered complete until the streaming is completed
         @functools.wraps(func)
-        def stream_wrapper(
-            *args: Any, langsmith_extra: Optional[LangSmithExtra] = None, **kwargs: Any
-        ) -> Any:
+        def stream_wrapper(*args: Any, langsmith_extra: Optional[LangSmithExtra] = None, **kwargs: Any) -> Any:
             if not func_accepts_config:
                 kwargs.pop("config", None)
             trace_container = _setup_run(
@@ -992,9 +942,7 @@ def traceable(
                     kwargs["run_tree"] = trace_container["new_run"]
                 stream = await func(*args, **kwargs)
             except Exception as e:
-                await aitertools.aio_to_thread(
-                    copy_context(), _on_run_end, trace_container, error=e
-                )
+                await aitertools.aio_to_thread(copy_context(), _on_run_end, trace_container, error=e)
                 raise
 
             if hasattr(stream, "__aiter__"):
@@ -1004,9 +952,7 @@ def traceable(
                 return _TracedStream(stream, trace_container, reduce_fn)
 
             # If it's not iterable, end the trace immediately
-            await aitertools.aio_to_thread(
-                copy_context(), _on_run_end, trace_container, outputs=stream
-            )
+            await aitertools.aio_to_thread(copy_context(), _on_run_end, trace_container, outputs=stream)
             return stream
 
         if inspect.isasyncgenfunction(func):
@@ -1040,19 +986,9 @@ def traceable(
         if not sig.parameters.get("config"):
             sig = sig.replace(
                 parameters=[
-                    *(
-                        param
-                        for param in sig.parameters.values()
-                        if param.kind != inspect.Parameter.VAR_KEYWORD
-                    ),
-                    inspect.Parameter(
-                        "config", inspect.Parameter.KEYWORD_ONLY, default=None
-                    ),
-                    *(
-                        param
-                        for param in sig.parameters.values()
-                        if param.kind == inspect.Parameter.VAR_KEYWORD
-                    ),
+                    *(param for param in sig.parameters.values() if param.kind != inspect.Parameter.VAR_KEYWORD),
+                    inspect.Parameter("config", inspect.Parameter.KEYWORD_ONLY, default=None),
+                    *(param for param in sig.parameters.values() if param.kind == inspect.Parameter.VAR_KEYWORD),
                 ]
             )
             selected_wrapper.__signature__ = sig  # type: ignore[attr-defined]
@@ -1152,9 +1088,7 @@ class trace:
         project_name: Optional[str] = None,
         agent_id: Optional[str] = None,
         agent_environment: Optional[str] = None,
-        parent: Optional[
-            Union[run_trees.RunTree, str, Mapping, Literal["ignore"]]
-        ] = None,
+        parent: Optional[Union[run_trees.RunTree, str, Mapping, Literal["ignore"]]] = None,
         tags: Optional[list[str]] = None,
         metadata: Optional[Mapping[str, Any]] = None,
         client: Optional[ls_client.Client] = None,
@@ -1171,8 +1105,7 @@ class trace:
         self._end_on_exit = kwargs.pop("_end_on_exit", True)
         if kwargs:
             warnings.warn(
-                "The `trace` context manager no longer supports the following kwargs: "
-                f"{sorted(kwargs.keys())}.",
+                f"The `trace` context manager no longer supports the following kwargs: {sorted(kwargs.keys())}.",
                 DeprecationWarning,
             )
         self.name = name
@@ -1254,9 +1187,7 @@ class trace:
             self.new_run = run_trees.RunTree(
                 name=self.name,
                 id=ls_client._ensure_uuid(self.run_id),
-                reference_example_id=ls_client._ensure_uuid(
-                    self.reference_example_id, accept_null=True
-                ),
+                reference_example_id=ls_client._ensure_uuid(self.reference_example_id, accept_null=True),
                 run_type=self.run_type,
                 extra=extra_outer,
                 project_name=project_name_,
@@ -1304,9 +1235,7 @@ class trace:
         if self.new_run is None:
             return
         if exc_type is not None:
-            tb = _format_error_with_exceptions_to_handle(
-                exc_value, self.exceptions_to_handle
-            )
+            tb = _format_error_with_exceptions_to_handle(exc_value, self.exceptions_to_handle)
             self.new_run.end(error=tb)
         if self.old_ctx is not None:
             enabled = utils.tracing_is_enabled(self.old_ctx)
@@ -1367,15 +1296,9 @@ class trace:
         """
         ctx = copy_context()
         if exc_type is not None:
-            await asyncio.shield(
-                aitertools.aio_to_thread(
-                    ctx, self._teardown, exc_type, exc_value, traceback
-                )
-            )
+            await asyncio.shield(aitertools.aio_to_thread(ctx, self._teardown, exc_type, exc_value, traceback))
         else:
-            await aitertools.aio_to_thread(
-                ctx, self._teardown, exc_type, exc_value, traceback
-            )
+            await aitertools.aio_to_thread(ctx, self._teardown, exc_type, exc_value, traceback)
         _set_tracing_context(get_tracing_context(ctx))
 
 
@@ -1406,9 +1329,7 @@ def _get_addressing(
     been named takes effect at the same point; `_resolve_addressing` settles
     which of the two the run ends up carrying.
     """
-    return _agent_addressing.resolve(
-        *_named_addressing(project_name, agent_id, agent_environment)
-    )
+    return _agent_addressing.resolve(*_named_addressing(project_name, agent_id, agent_environment))
 
 
 def _named_addressing(
@@ -1429,10 +1350,7 @@ def _named_addressing(
         or _context._PROJECT_NAME.get()
         or (prt.session_name if prt else None)
         or _context._GLOBAL_PROJECT_NAME,
-        agent_id
-        or _context._AGENT_ID.get()
-        or (prt.agent_id if prt else None)
-        or _context._GLOBAL_AGENT_ID,
+        agent_id or _context._AGENT_ID.get() or (prt.agent_id if prt else None) or _context._GLOBAL_AGENT_ID,
         agent_environment
         or _context._AGENT_ENVIRONMENT.get()
         or (prt.agent_environment if prt else None)
@@ -1466,8 +1384,7 @@ def as_runnable(traceable_fn: Callable) -> Runnable:
         from langchain_core.runnables.utils import Input, Output
     except ImportError as e:
         raise ImportError(
-            "as_runnable requires langchain-core to be installed. "
-            "You can install it with `pip install langchain-core`."
+            "as_runnable requires langchain-core to be installed. You can install it with `pip install langchain-core`."
         ) from e
     if not is_traceable_function(traceable_fn):
         try:
@@ -1539,8 +1456,7 @@ def as_runnable(traceable_fn: Callable) -> Runnable:
 
             if not is_traceable_function(afunc):
                 raise ValueError(
-                    "RunnableTraceable expects a function wrapped by the LangSmith"
-                    f" @traceable decorator. Got {afunc}"
+                    f"RunnableTraceable expects a function wrapped by the LangSmith @traceable decorator. Got {afunc}"
                 )
             afunc_ = cast(Callable[..., Awaitable[Output]], afunc)
 
@@ -1548,9 +1464,7 @@ def as_runnable(traceable_fn: Callable) -> Runnable:
                 run_tree = run_trees.RunTree.from_runnable_config(cast(dict, config))
                 return await afunc_(**inputs, langsmith_extra={"run_tree": run_tree})
 
-            return cast(
-                Callable[[Input, RunnableConfig], Awaitable[Output]], awrap_traceable
-            )
+            return cast(Callable[[Input, RunnableConfig], Awaitable[Output]], awrap_traceable)
 
     return RunnableTraceable(traceable_fn)
 
@@ -1637,18 +1551,14 @@ def _container_end(
         try:
             dict_outputs = outputs.model_dump(exclude_none=True, mode="json")
         except Exception as e:
-            LOGGER.debug(
-                f"Failed to use model_dump to serialize {type(outputs)} to JSON: {e}"
-            )
+            LOGGER.debug(f"Failed to use model_dump to serialize {type(outputs)} to JSON: {e}")
             dict_outputs = {"output": outputs}
     else:
         dict_outputs = {"output": outputs}
     if (usage := _extract_usage(run_tree=run_tree, outputs=dict_outputs)) is not None:
         run_tree.metadata["usage_metadata"] = usage
     if error:
-        error_repr = _format_error_with_exceptions_to_handle(
-            error, container.get("exceptions_to_handle")
-        )
+        error_repr = _format_error_with_exceptions_to_handle(error, container.get("exceptions_to_handle"))
     else:
         error_repr = None
         if (_on_success := container.get("_on_success")) and callable(_on_success):
@@ -1724,9 +1634,7 @@ def _get_parent_run(
         return run_tree
     crt = get_current_run_tree()
     if _runtime_env.get_langchain_core_version() is not None:
-        if rt := run_trees.RunTree.from_runnable_config(
-            config, client=langsmith_extra.get("client")
-        ):
+        if rt := run_trees.RunTree.from_runnable_config(config, client=langsmith_extra.get("client")):
             # Still need to break ties when alternating between traceable and
             # LanChain code.
             # Nesting: LC -> LS -> LS, we want to still use LS as the parent
@@ -1760,16 +1668,12 @@ def _setup_run(
     tags = container_input.get("tags")
     client = container_input.get("client")
     run_type = container_input.get("run_type") or "chain"
-    dangerously_allow_filesystem = container_input.get(
-        "dangerously_allow_filesystem", False
-    )
+    dangerously_allow_filesystem = container_input.get("dangerously_allow_filesystem", False)
     outer_project = _context._PROJECT_NAME.get()
     langsmith_extra = langsmith_extra or LangSmithExtra()
     name = langsmith_extra.get("name") or container_input.get("name")
     client_ = langsmith_extra.get("client", client) or _context._CLIENT.get()
-    parent_run_ = _get_parent_run(
-        {**langsmith_extra, "client": client_}, kwargs.get("config")
-    )
+    parent_run_ = _get_parent_run({**langsmith_extra, "client": client_}, kwargs.get("config"))
     _agent_addressing.reject_conflicting(
         project=langsmith_extra.get("project_name"),
         agent_id=langsmith_extra.get("agent_id"),
@@ -1788,9 +1692,7 @@ def _setup_run(
         selected_agent_environment,
     ) = _agent_addressing.resolve(
         project_cv  # From parent trace
-        or (
-            parent_run_.session_name if parent_run_ else None
-        )  # from parent run attempt 2 (not managed by traceable)
+        or (parent_run_.session_name if parent_run_ else None)  # from parent run attempt 2 (not managed by traceable)
         or langsmith_extra.get("project_name")  # at invocation time
         or container_input["project_name"]  # at decorator time
         or _context._GLOBAL_PROJECT_NAME,  # global fallback from ls.configure
@@ -1812,9 +1714,7 @@ def _setup_run(
     # - enabled=False: never trace
     # - enabled=True: always trace
     # - enabled=None: use context/environment setting
-    if enabled is False or (
-        enabled is not True and not (parent_run_ or utils.tracing_is_enabled())
-    ):
+    if enabled is False or (enabled is not True and not (parent_run_ or utils.tracing_is_enabled())):
         utils.log_once(
             logging.DEBUG,
             "LangSmith tracing is not enabled, returning original function.",
@@ -1848,15 +1748,11 @@ def _setup_run(
     metadata_.update(metadata or {})
     metadata_["ls_method"] = "traceable"
     extra_inner["metadata"] = metadata_
-    inputs, attachments = _get_inputs_and_attachments_safe(
-        signature, *args, func=func, **kwargs
-    )
+    inputs, attachments = _get_inputs_and_attachments_safe(signature, *args, func=func, **kwargs)
     invocation_params_fn = container_input.get("invocation_params_fn")
     if invocation_params_fn:
         try:
-            invocation_params = {
-                k: v for k, v in invocation_params_fn(inputs).items() if v is not None
-            }
+            invocation_params = {k: v for k, v in invocation_params_fn(inputs).items() if v is not None}
             if invocation_params and isinstance(invocation_params, dict):
                 metadata_.update(invocation_params)
         except BaseException as e:
@@ -1875,9 +1771,7 @@ def _setup_run(
                 )
             else:
                 # Fail closed: trace the run, but with a marker, not raw inputs.
-                LOGGER.warning(
-                    "process_inputs failed for %s; dropping inputs: %s", name_, e
-                )
+                LOGGER.warning("process_inputs failed for %s; dropping inputs: %s", name_, e)
                 inputs = {_PROCESSING_FAILED_KEY: _processing_failed("inputs", e)}
     tags_ = (langsmith_extra.get("tags") or []) + (outer_tags or [])
     context.run(_context._TAGS.set, tags_)
@@ -1898,9 +1792,7 @@ def _setup_run(
             "name": name_,
             "inputs": inputs,
             "run_type": run_type,
-            "reference_example_id": ls_client._ensure_uuid(
-                reference_example_id, accept_null=True
-            ),
+            "reference_example_id": ls_client._ensure_uuid(reference_example_id, accept_null=True),
             "project_name": selected_project,
             "agent_id": selected_agent_id,
             "agent_environment": selected_agent_environment,
@@ -1988,9 +1880,7 @@ def _is_traceable_function(func: Any) -> bool:
     return getattr(func, "__langsmith_traceable__", False)
 
 
-def _get_inputs(
-    signature: inspect.Signature, *args: Any, **kwargs: Any
-) -> dict[str, Any]:
+def _get_inputs(signature: inspect.Signature, *args: Any, **kwargs: Any) -> dict[str, Any]:
     """Return a dictionary of inputs from the function signature."""
     bound = signature.bind_partial(*args, **kwargs)
     bound.apply_defaults()
@@ -2008,9 +1898,7 @@ def _get_inputs(
     return arguments
 
 
-def _get_inputs_safe(
-    signature: inspect.Signature, *args: Any, **kwargs: Any
-) -> dict[str, Any]:
+def _get_inputs_safe(signature: inspect.Signature, *args: Any, **kwargs: Any) -> dict[str, Any]:
     try:
         return _get_inputs(signature, *args, **kwargs)
     except BaseException as e:
@@ -2034,10 +1922,7 @@ def _is_attachment(param: inspect.Parameter, func: Optional[Callable] = None) ->
             if resolved_annotation is not None:
                 return resolved_annotation == schemas.Attachment or (
                     get_origin(resolved_annotation) == Annotated
-                    and any(
-                        arg == schemas.Attachment
-                        for arg in get_args(resolved_annotation)
-                    )
+                    and any(arg == schemas.Attachment for arg in get_args(resolved_annotation))
                 )
         except (NameError, TypeError, AttributeError):
             pass
@@ -2045,14 +1930,8 @@ def _is_attachment(param: inspect.Parameter, func: Optional[Callable] = None) ->
     return False
 
 
-def _attachment_args_helper(
-    signature: inspect.Signature, func: Optional[Callable] = None
-) -> set[str]:
-    return {
-        name
-        for name, param in signature.parameters.items()
-        if _is_attachment(param, func)
-    }
+def _attachment_args_helper(signature: inspect.Signature, func: Optional[Callable] = None) -> set[str]:
+    return {name for name, param in signature.parameters.items() if _is_attachment(param, func)}
 
 
 @functools.lru_cache(maxsize=1000)
@@ -2060,15 +1939,13 @@ def _cached_attachment_args_by_signature(signature: inspect.Signature) -> set[st
     return _attachment_args_helper(signature, None)
 
 
-_attachment_args_cache: weakref.WeakKeyDictionary[
-    Callable[..., Any], tuple[inspect.Signature, set[str]]
-] = weakref.WeakKeyDictionary()
+_attachment_args_cache: weakref.WeakKeyDictionary[Callable[..., Any], tuple[inspect.Signature, set[str]]] = (
+    weakref.WeakKeyDictionary()
+)
 _attachment_args_cache_lock = threading.Lock()
 
 
-def _cached_attachment_args(
-    signature: inspect.Signature, func: Optional[Callable] = None
-) -> set[str]:
+def _cached_attachment_args(signature: inspect.Signature, func: Optional[Callable] = None) -> set[str]:
     if func is None:
         return _cached_attachment_args_by_signature(signature)
 
@@ -2097,9 +1974,7 @@ def _clear_cached_attachment_args() -> None:
 _cached_attachment_args.cache_clear = _clear_cached_attachment_args  # type: ignore[attr-defined]
 
 
-def _attachment_args(
-    signature: inspect.Signature, func: Optional[Callable] = None
-) -> set[str]:
+def _attachment_args(signature: inspect.Signature, func: Optional[Callable] = None) -> set[str]:
     # Caching signatures fails if there's unhashable default values.
     try:
         return _cached_attachment_args(signature, func)
@@ -2179,17 +2054,11 @@ def _process_iterator(
                 traced_item = process_chunk(item)
             else:
                 traced_item = item
-            if (
-                is_llm_run
-                and run_container["new_run"]
-                and not run_container.get("_token_event_logged")
-            ):
+            if is_llm_run and run_container["new_run"] and not run_container.get("_token_event_logged"):
                 run_container["new_run"].add_event(
                     {
                         "name": "new_token",
-                        "time": datetime.datetime.now(
-                            datetime.timezone.utc
-                        ).isoformat(),
+                        "time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         "kwargs": {"token": traced_item},
                     }
                 )
@@ -2231,9 +2100,7 @@ async def _process_async_iterator(
                     )
                 else:
                     # Python < 3.11
-                    with tracing_context(
-                        **get_tracing_context(run_container["context"])
-                    ):
+                    with tracing_context(**get_tracing_context(run_container["context"])):
                         item = await anext_with_otel_context()
             else:
                 if accepts_context:
@@ -2243,25 +2110,17 @@ async def _process_async_iterator(
                     )
                 else:
                     # Python < 3.11
-                    with tracing_context(
-                        **get_tracing_context(run_container["context"])
-                    ):
+                    with tracing_context(**get_tracing_context(run_container["context"])):
                         item = await aitertools.py_anext(generator)
             if process_chunk:
                 traced_item = process_chunk(item)
             else:
                 traced_item = item
-            if (
-                is_llm_run
-                and run_container["new_run"]
-                and not run_container.get("_token_event_logged")
-            ):
+            if is_llm_run and run_container["new_run"] and not run_container.get("_token_event_logged"):
                 run_container["new_run"].add_event(
                     {
                         "name": "new_token",
-                        "time": datetime.datetime.now(
-                            datetime.timezone.utc
-                        ).isoformat(),
+                        "time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         "kwargs": {"token": traced_item},
                     }
                 )
@@ -2289,11 +2148,7 @@ class _TracedStreamBase(Generic[T]):
         self.__ls_completed__ = False
         self.__ls_reduce_fn__ = reduce_fn
         self.__ls_accumulated_output__: list[T] = []
-        self.__is_llm_run__ = (
-            trace_container["new_run"].run_type == "llm"
-            if trace_container["new_run"]
-            else False
-        )
+        self.__is_llm_run__ = trace_container["new_run"].run_type == "llm" if trace_container["new_run"] else False
 
     def __getattr__(self, name: str):
         return getattr(self.__ls_stream__, name)
@@ -2460,9 +2315,7 @@ def _get_function_result(results: list, reduce_fn: Callable) -> Any:
 def _cleanup_traceback(e: BaseException):
     tb_ = e.__traceback__
     if tb_:
-        while tb_.tb_next is not None and tb_.tb_frame.f_code.co_filename.endswith(
-            _EXCLUDED_FRAME_FNAME
-        ):
+        while tb_.tb_next is not None and tb_.tb_frame.f_code.co_filename.endswith(_EXCLUDED_FRAME_FNAME):
             tb_ = tb_.tb_next
         e.__traceback__ = tb_
 

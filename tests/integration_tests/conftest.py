@@ -76,9 +76,7 @@ def filter_request_data(request):
                 body_str = request.body
 
             # Replace API keys and other sensitive data
-            body_str = re.sub(
-                r'(api[-_]?key"?\s*:\s*")\w+(")', r"\1FILTERED\2", body_str
-            )
+            body_str = re.sub(r'(api[-_]?key"?\s*:\s*")\w+(")', r"\1FILTERED\2", body_str)
             body_str = re.sub(r"(Bearer\s+)[A-Za-z0-9-_]+", r"\1FILTERED", body_str)
 
             # Update the request body
