@@ -38,11 +38,9 @@ from langsmith.run_helpers import (
     _cached_attachment_args,
     _get_inputs,
     _get_inputs_and_attachments_safe,
-    _get_parent_run,
     _processing_failed,
     as_runnable,
     get_current_run_tree,
-    get_tracing_context,
     is_traceable_function,
     trace,
     traceable,
@@ -255,9 +253,7 @@ def mock_client() -> Client:
 
 @pytest.mark.parametrize("use_next", [True, False])
 @pytest.mark.parametrize("return_val", [None, "foo"])
-def test_traceable_iterator(
-    use_next: bool, return_val: Optional[str], mock_client: Client
-) -> None:
+def test_traceable_iterator(use_next: bool, return_val: Optional[str], mock_client: Client) -> None:
     with tracing_context(enabled=True):
 
         @traceable(client=mock_client)
@@ -330,9 +326,7 @@ class MyAsyncStreamObject:
 
 @pytest.mark.parametrize("use_next", [True, False])
 @pytest.mark.parametrize("response_type", ["async", "async"])
-async def test_traceable_stream(
-    use_next: bool, response_type: str, mock_client: Client
-) -> None:
+async def test_traceable_stream(use_next: bool, response_type: str, mock_client: Client) -> None:
     def reduce_fn(results: list):
         return {"my_output": results}
 
@@ -377,9 +371,7 @@ async def test_traceable_stream(
     call = mock_calls[0]
     assert call.args[0] == "POST"
     assert call.args[1].startswith("https://api.smith.langchain.com")
-    call_data = [
-        parse_request_data(mock_call.kwargs["data"]) for mock_call in mock_calls
-    ]
+    call_data = [parse_request_data(mock_call.kwargs["data"]) for mock_call in mock_calls]
     body = call_data[0]
     assert body["post"]
     assert body["post"][0]["name"] == "my_stream_fn"
@@ -393,9 +385,7 @@ async def test_traceable_stream(
             if attempt > 2:
                 assert False, "Could not get patch"
             mock_calls = _get_calls(mock_client, minimum=1)
-            call_data = [
-                parse_request_data(mock_call.kwargs["data"]) for mock_call in mock_calls
-            ]
+            call_data = [parse_request_data(mock_call.kwargs["data"]) for mock_call in mock_calls]
             first_patch = next((d for d in call_data if d.get("patch")), None)
             attempt += 1
         if "name" in first_patch:
@@ -471,11 +461,9 @@ def test_process_inputs_failure_drops_inputs(mock_client: Client) -> None:
     # Fail closed: no cleartext reaches LangSmith, not even via the error text.
     assert secret not in json.dumps(payloads, default=str)
     # ...and the gap is explicit rather than silent.
-    assert any(
-        p.get("inputs", {}).get("ls_error")
-        == _processing_failed("inputs", ValueError())
-        for p in payloads
-    ), f"expected the inputs marker, got {[p.get('inputs') for p in payloads]}"
+    assert any(p.get("inputs", {}).get("ls_error") == _processing_failed("inputs", ValueError()) for p in payloads), (
+        f"expected the inputs marker, got {[p.get('inputs') for p in payloads]}"
+    )
 
 
 def test_process_outputs_failure_drops_outputs(mock_client: Client) -> None:
@@ -498,19 +486,15 @@ def test_process_outputs_failure_drops_outputs(mock_client: Client) -> None:
     datas = _get_data(_get_calls(mock_client))
     payloads = [p for _, p in datas]
     assert secret not in json.dumps(payloads, default=str)
-    assert any(
-        p.get("outputs", {}).get("ls_error")
-        == _processing_failed("outputs", ValueError())
-        for p in payloads
-    ), f"expected the outputs marker, got {[p.get('outputs') for p in payloads]}"
+    assert any(p.get("outputs", {}).get("ls_error") == _processing_failed("outputs", ValueError()) for p in payloads), (
+        f"expected the outputs marker, got {[p.get('outputs') for p in payloads]}"
+    )
     # Still ended, and not errored: that status is for the traced fn failing.
     assert any(p.get("end_time") for p in payloads), "run must still be ended"
     assert all(not p.get("error") for p in payloads), "run must not be errored"
 
 
-def test_allow_unprocessed_payloads_restores_raw_inputs(
-    mock_client: Client, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_allow_unprocessed_payloads_restores_raw_inputs(mock_client: Client, monkeypatch: pytest.MonkeyPatch) -> None:
     """The env flag restores the pre-fail-closed behavior for inputs."""
     monkeypatch.setenv("LANGSMITH_ALLOW_UNPROCESSED_PAYLOADS", "true")
     ls_utils.get_env_var.cache_clear()
@@ -536,9 +520,7 @@ def test_allow_unprocessed_payloads_restores_raw_inputs(
         ls_utils.get_env_var.cache_clear()
 
 
-def test_allow_unprocessed_payloads_restores_raw_outputs(
-    mock_client: Client, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_allow_unprocessed_payloads_restores_raw_outputs(mock_client: Client, monkeypatch: pytest.MonkeyPatch) -> None:
     """The env flag restores the pre-fail-closed behavior for outputs."""
     monkeypatch.setenv("LANGSMITH_ALLOW_UNPROCESSED_PAYLOADS", "true")
     ls_utils.get_env_var.cache_clear()
@@ -731,12 +713,7 @@ def test_traceable_parent_from_runnable_config() -> None:
 
         my_function_runnable = RunnableLambda(my_function)
 
-        assert (
-            my_function_runnable.invoke(
-                1, {"callbacks": [LangChainTracer(client=mock_client_)]}
-            )
-            == 2
-        )
+        assert my_function_runnable.invoke(1, {"callbacks": [LangChainTracer(client=mock_client_)]}) == 2
         # Inspect the mock_calls and assert that 2 runs were created,
         # one for the parent and one for the child
         mock_calls = _get_calls(mock_client_, minimum=2)
@@ -770,12 +747,7 @@ def test_traceable_parent_from_runnable_config_accepts_config() -> None:
 
         my_function_runnable = RunnableLambda(my_function)
 
-        assert (
-            my_function_runnable.invoke(
-                1, {"callbacks": [LangChainTracer(client=mock_client_)]}
-            )
-            == 2
-        )
+        assert my_function_runnable.invoke(1, {"callbacks": [LangChainTracer(client=mock_client_)]}) == 2
         # Inspect the mock_calls and assert that 2 runs were created,
         # one for the parent and one for the child
         mock_calls = _get_calls(mock_client_, minimum=2)
@@ -887,12 +859,8 @@ def test_traceable_warning() -> None:
 
         assert len(warning_records) == 1
         assert issubclass(warning_records[0].category, UserWarning)
-        assert "Unrecognized run_type: invalid_run_type" in str(
-            warning_records[0].message
-        )
-        assert "Did you mean @traceable(name='invalid_run_type')?" in str(
-            warning_records[0].message
-        )
+        assert "Unrecognized run_type: invalid_run_type" in str(warning_records[0].message)
+        assert "Did you mean @traceable(name='invalid_run_type')?" in str(warning_records[0].message)
 
 
 def test_traceable_wrong_run_type_pos_arg() -> None:
@@ -906,9 +874,7 @@ def test_traceable_wrong_run_type_pos_arg() -> None:
         assert len(warning_records) == 1
         assert issubclass(warning_records[0].category, UserWarning)
         assert "Unrecognized run_type: my_run_type" in str(warning_records[0].message)
-        assert "Did you mean @traceable(name='my_run_type')?" in str(
-            warning_records[0].message
-        )
+        assert "Did you mean @traceable(name='my_run_type')?" in str(warning_records[0].message)
 
 
 def test_traceable_too_many_pos_args() -> None:
@@ -944,9 +910,7 @@ async def test_async_generator():
     @traceable
     async def another_async_func(query: str) -> str:
         rid = uuid.uuid4()
-        with langsmith.trace(
-            name="zee-cm", inputs={"query": query}, run_id=rid
-        ) as run_tree:
+        with langsmith.trace(name="zee-cm", inputs={"query": query}, run_id=rid) as run_tree:
             run_tree.end(outputs={"query": query})
             assert run_tree.id == rid
         return query
@@ -957,9 +921,7 @@ async def test_async_generator():
         return "\n".join(documents)
 
     @traceable
-    async def summarize_answers(
-        query: str, document_context: str
-    ) -> AsyncGenerator[str, None]:
+    async def summarize_answers(query: str, document_context: str) -> AsyncGenerator[str, None]:
         await asyncio.sleep(0.01)
         for i in range(3):
             yield f"Answer {i}"
@@ -1001,9 +963,7 @@ async def test_async_generator():
 
     mock_client_ = _get_mock_client()
     with tracing_context(enabled=True):
-        chunks = my_answer(
-            "some_query", langsmith_extra={"on_end": _get_run, "client": mock_client_}
-        )
+        chunks = my_answer("some_query", langsmith_extra={"on_end": _get_run, "client": mock_client_})
         all_chunks = []
         async for chunk in chunks:
             all_chunks.append(chunk)
@@ -1041,9 +1001,7 @@ def test_generator():
         return "\n".join(documents)
 
     @traceable
-    def summarize_answers(
-        query: str, document_context: str
-    ) -> Generator[str, None, None]:
+    def summarize_answers(query: str, document_context: str) -> Generator[str, None, None]:
         for i in range(3):
             yield f"Answer {i}"
 
@@ -1160,9 +1118,7 @@ def test_traceable_regular(enabled: Union[bool, Literal["local"]]):
 
     mock_client_ = _get_mock_client()
     with tracing_context(enabled=enabled):
-        all_chunks = my_answer(
-            "some_query", langsmith_extra={"on_end": _get_run, "client": mock_client_}
-        )
+        all_chunks = my_answer("some_query", langsmith_extra={"on_end": _get_run, "client": mock_client_})
 
     assert all_chunks == [
         "some_query",
@@ -1210,9 +1166,7 @@ async def test_traceable_async(enabled: Union[bool, Literal["local"]]):
         query: str,
     ) -> list:
         expanded_terms = some_sync_func(query=query)
-        documents = await some_async_func(
-            queries=expanded_terms, required="foo", a=1, b=2
-        )
+        documents = await some_async_func(queries=expanded_terms, required="foo", a=1, b=2)
 
         await another_async_func(query=query)
 
@@ -1220,9 +1174,7 @@ async def test_traceable_async(enabled: Union[bool, Literal["local"]]):
             documents=documents,
         )
 
-        final_answer = await summarize_answers(
-            query=query, document_context=document_context
-        )
+        final_answer = await summarize_answers(query=query, document_context=document_context)
         return documents + final_answer
 
     run: Optional[RunTree] = None  # type: ignore
@@ -1233,9 +1185,7 @@ async def test_traceable_async(enabled: Union[bool, Literal["local"]]):
 
     mock_client_ = _get_mock_client()
     with tracing_context(enabled=enabled):
-        all_chunks = await my_answer(
-            "some_query", langsmith_extra={"on_end": _get_run, "client": mock_client_}
-        )
+        all_chunks = await my_answer("some_query", langsmith_extra={"on_end": _get_run, "client": mock_client_})
 
     assert all_chunks == [
         "some_query",
@@ -1266,9 +1216,7 @@ def test_traceable_to_trace(enabled: Union[bool, Literal["local"]]):
 
     mock_client_ = _get_mock_client()
     with tracing_context(enabled=enabled):
-        result = parent_fn(
-            1, 2, langsmith_extra={"on_end": _get_run, "client": mock_client_}
-        )
+        result = parent_fn(1, 2, langsmith_extra={"on_end": _get_run, "client": mock_client_})
 
     assert result == 3
     assert run is not None
@@ -1288,12 +1236,8 @@ async def test_traceable_to_atrace(enabled: Union[bool, Literal["local"]]):
 
     @traceable
     async def parent_fn(a: int, b: int) -> int:
-        async with langsmith.trace(
-            name="child_fn", inputs={"a": a, "b": b}
-        ) as run_tree:
-            async with langsmith.trace(
-                "grandchild_fn", inputs={"a": a, "b": b, "c": "oh my"}
-            ) as run_tree_gc:
+        async with langsmith.trace(name="child_fn", inputs={"a": a, "b": b}) as run_tree:
+            async with langsmith.trace("grandchild_fn", inputs={"a": a, "b": b, "c": "oh my"}) as run_tree_gc:
                 try:
                     async with langsmith.trace("expect_error", inputs={}):
                         raise ValueError("oh no")
@@ -1312,9 +1256,7 @@ async def test_traceable_to_atrace(enabled: Union[bool, Literal["local"]]):
 
     mock_client_ = _get_mock_client()
     with tracing_context(enabled=enabled):
-        result = await parent_fn(
-            1, 2, langsmith_extra={"on_end": _get_run, "client": mock_client_}
-        )
+        result = await parent_fn(1, 2, langsmith_extra={"on_end": _get_run, "client": mock_client_})
 
     assert result == 3
     assert run is not None
@@ -1335,9 +1277,7 @@ def test_trace_to_traceable(enabled: Union[bool, Literal["local"]]):
     mock_client_ = _get_mock_client()
     with tracing_context(enabled=enabled):
         rid = uuid.uuid4()
-        with langsmith.trace(
-            name="parent_fn", inputs={"a": 1, "b": 2}, client=mock_client_, run_id=rid
-        ) as run:
+        with langsmith.trace(name="parent_fn", inputs={"a": 1, "b": 2}, client=mock_client_, run_id=rid) as run:
             result = child_fn(1, 2)
             run.end(outputs={"result": result})
             assert run.id == rid
@@ -1367,9 +1307,7 @@ def test_client_passed_when_trace_parent():
     rt = RunTree(name="foo", client=mock_client)
     headers = rt.to_headers()
     with tracing_context(enabled=True):
-        with trace(
-            name="foo", inputs={"foo": "bar"}, parent=headers, client=mock_client
-        ) as rt:
+        with trace(name="foo", inputs={"foo": "bar"}, parent=headers, client=mock_client) as rt:
             rt.outputs["bar"] = "baz"
     calls = _get_calls(mock_client)
     assert len(calls) == 1
@@ -1386,9 +1324,7 @@ def test_client_not_called_when_enabled_local():
     mock_client = _get_mock_client()
     headers = RunTree(name="foo", client=mock_client).to_headers()
     with tracing_context(enabled="local"):
-        with trace(
-            name="foo", inputs={"foo": "bar"}, parent=headers, client=mock_client
-        ) as rt:
+        with trace(name="foo", inputs={"foo": "bar"}, parent=headers, client=mock_client) as rt:
             rt.outputs["bar"] = "baz"
     calls = _get_calls(mock_client)
     assert len(calls) == 0
@@ -1480,9 +1416,7 @@ def test_io_interops():
     for stage in stage_added:
         current = {**current, **stage_added[stage]}
         expected_at_stage[stage] = current
-    parent_result = the_parent.invoke(
-        stage_added["parent_input"], {"callbacks": [tracer]}
-    )
+    parent_result = the_parent.invoke(stage_added["parent_input"], {"callbacks": [tracer]})
     assert parent_result == expected_at_stage["parent_output"]
     mock_posts = _get_calls(tracer.client, minimum=5)
     assert len(mock_posts) == 5
@@ -1516,9 +1450,7 @@ def test_io_interops():
     # Check the patch requests
     mock_patches = _get_calls(tracer.client, verbs={"PATCH"}, minimum=5)
     assert len(mock_patches) == 5
-    patches_datas = [
-        parse_request_data(mock_patch.kwargs["data"]) for mock_patch in mock_patches
-    ]
+    patches_datas = [parse_request_data(mock_patch.kwargs["data"]) for mock_patch in mock_patches]
     patches_dict = {d["id"]: d for d in patches_datas}
     child_patch = patches_dict[ids["child"]]
     assert child_patch["outputs"] == expected_at_stage["child_output"]
@@ -1552,9 +1484,7 @@ def test_trace_nested_enable_disable():
             with tracing_context(enabled=False):
                 with trace(name="bar", inputs={"b": 2}, client=mock_client) as run2:
                     with tracing_context(enabled=True):
-                        with trace(
-                            name="baz", inputs={"c": 3}, client=mock_client
-                        ) as run3:
+                        with trace(name="baz", inputs={"c": 3}, client=mock_client) as run3:
                             run3.end(outputs={"c": 3})
                             run2.end(outputs={"b": 2})
                             run.end(outputs={"a": 1})
@@ -1583,9 +1513,7 @@ def test_tracing_disabled_project_name_set():
         return a
 
     with tracing_context(enabled=False):
-        with trace(
-            name="foo", inputs={"a": 1}, client=mock_client, project_name="my_project"
-        ):
+        with trace(name="foo", inputs={"a": 1}, client=mock_client, project_name="my_project"):
             pass
         foo(1, langsmith_extra={"client": mock_client, "project_name": "my_project"})
 
@@ -1618,9 +1546,7 @@ async def test_traceable_async_exception(auto_batch_tracing: bool):
 
     # Get ALL the call args for the mock_client
     num_calls = 1 if auto_batch_tracing else 2
-    mock_calls = _get_calls(
-        mock_client, verbs={"POST", "PATCH", "GET"}, minimum=num_calls
-    )
+    mock_calls = _get_calls(mock_client, verbs={"POST", "PATCH", "GET"}, minimum=num_calls)
     assert len(mock_calls) >= num_calls
 
 
@@ -1653,9 +1579,7 @@ async def test_traceable_async_gen_exception(auto_batch_tracing: bool):
 
     # Get ALL the call args for the mock_client
     num_calls = 1 if auto_batch_tracing else 2
-    mock_calls = _get_calls(
-        mock_client, verbs={"POST", "PATCH", "GET"}, minimum=num_calls
-    )
+    mock_calls = _get_calls(mock_client, verbs={"POST", "PATCH", "GET"}, minimum=num_calls)
 
     assert len(mock_calls) == num_calls
     if auto_batch_tracing:
@@ -1694,9 +1618,7 @@ async def test_traceable_gen_exception(auto_batch_tracing: bool):
 
     # Get ALL the call args for the mock_client
     num_calls = 1 if auto_batch_tracing else 2
-    mock_calls = _get_calls(
-        mock_client, verbs={"POST", "PATCH", "GET"}, minimum=num_calls
-    )
+    mock_calls = _get_calls(mock_client, verbs={"POST", "PATCH", "GET"}, minimum=num_calls)
 
     assert len(mock_calls) == num_calls
     if auto_batch_tracing:
@@ -1764,9 +1686,7 @@ async def test_process_inputs_outputs():
         assert call.args[1].startswith("https://api.smith.langchain.com")
         body = parse_request_data(call.kwargs["data"])
         assert body["post"]
-        assert body["post"][0]["inputs"] == {
-            "serialized_in": "what's the meaning of life?"
-        }
+        assert body["post"][0]["inputs"] == {"serialized_in": "what's the meaning of life?"}
         assert body["post"][0]["outputs"] == {"serialized_out": 24}
 
     _check_client(mock_client)
@@ -1840,12 +1760,7 @@ async def test_process_inputs_outputs():
 
     mock_client = _get_mock_client()
     with tracing_context(enabled=True):
-        result = [
-            i
-            async for i in amy_gen(
-                in_s, ooblek="nada", langsmith_extra={"client": mock_client}
-            )
-        ]
+        result = [i async for i in amy_gen(in_s, ooblek="nada", langsmith_extra={"client": mock_client})]
         assert result == [42]
     _check_client(mock_client)
 
@@ -1868,9 +1783,7 @@ def test_traceable_stop_iteration():
 @pytest.mark.flaky(retries=3)
 def test_traceable_input_attachments():
     with patch.object(ls_client.ls_env, "get_runtime_environment") as mock_get_env:
-        mock_get_env.return_value = {
-            "LANGSMITH_test_traceable_input_attachments": "aval"
-        }
+        mock_get_env.return_value = {"LANGSMITH_test_traceable_input_attachments": "aval"}
 
         @traceable
         def my_func(
@@ -1879,9 +1792,7 @@ def test_traceable_input_attachments():
             att2: Annotated[tuple, ls_schemas.Attachment],
             run_tree: RunTree,
         ):
-            run_tree.attachments["anoutput"] = ls_schemas.Attachment(
-                mime_type="text/plain", data=b"noidea"
-            )
+            run_tree.attachments["anoutput"] = ls_schemas.Attachment(mime_type="text/plain", data=b"noidea")
             return "foo"
 
         mock_client = _get_mock_client(
@@ -1922,30 +1833,17 @@ def test_traceable_input_attachments():
         assert len(datas) == 8
         trace_id = datas[0][0].split(".")[1]
 
-        _, (_, extra_stuff) = next(
-            data for data in datas if data[0] == f"post.{trace_id}.extra"
-        )
-        assert (
-            json.loads(extra_stuff)["runtime"].get(
-                "LANGSMITH_test_traceable_input_attachments"
-            )
-            == "aval"
-        )
+        _, (_, extra_stuff) = next(data for data in datas if data[0] == f"post.{trace_id}.extra")
+        assert json.loads(extra_stuff)["runtime"].get("LANGSMITH_test_traceable_input_attachments") == "aval"
 
-        _, (_, inputs) = next(
-            data for data in datas if data[0] == f"post.{trace_id}.inputs"
-        )
+        _, (_, inputs) = next(data for data in datas if data[0] == f"post.{trace_id}.inputs")
         assert json.loads(inputs) == {"val": 42}
         # last three are the mime types provided
-        _, (mime_type1, content1) = next(
-            data for data in datas if data[0] == f"attachment.{trace_id}.att1"
-        )
+        _, (mime_type1, content1) = next(data for data in datas if data[0] == f"attachment.{trace_id}.att1")
         assert mime_type1 == "text/plain"
         assert content1 == long_content
 
-        _, (mime_type2, content2) = next(
-            data for data in datas if data[0] == f"attachment.{trace_id}.att2"
-        )
+        _, (mime_type2, content2) = next(data for data in datas if data[0] == f"attachment.{trace_id}.att2")
         assert mime_type2 == "application/octet-stream"
         assert content2 == b"content2"
 
@@ -1983,9 +1881,7 @@ def test_attachment_detection_with_string_annotations() -> None:
 
     sig = inspect.signature(foo)
     test_attachment = ls_schemas.Attachment(mime_type="text/plain", data=b"test")
-    inputs, attachments = _get_inputs_and_attachments_safe(
-        sig, test_attachment, func=foo
-    )
+    inputs, attachments = _get_inputs_and_attachments_safe(sig, test_attachment, func=foo)
 
     assert inputs == {}
     assert attachments == {"bar": test_attachment}
@@ -2123,9 +2019,7 @@ def test_set_run_metadata_without_active_run_tree(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     langsmith.set_run_metadata(foo=1)
-    run_helper_logs = [
-        record for record in caplog.records if record.name == "langsmith.run_helpers"
-    ]
+    run_helper_logs = [record for record in caplog.records if record.name == "langsmith.run_helpers"]
     assert len(run_helper_logs) == 1
     assert "No active run tree found" in run_helper_logs[0].message
 
@@ -2384,8 +2278,7 @@ def test_traceable_disabled_clears_parent_context(mock_client: Client) -> None:
         # (the parent context was cleared, not inherited)
         inner_run = get_current_run_tree()
         assert inner_run is None, (
-            "Expected None when enabled=False, but got a RunTree. "
-            "Parent context should be cleared, not inherited."
+            "Expected None when enabled=False, but got a RunTree. Parent context should be cleared, not inherited."
         )
         return a * 2
 
@@ -2464,9 +2357,7 @@ def test_traceable_triple_decorated(mock_client: Client) -> None:
     def original_function(a: int) -> str:
         return f"foo {a}"
 
-    wrapped_function = some_other_decorator(
-        (traceable(client=mock_client, enabled=True)((original_function)))
-    )
+    wrapped_function = some_other_decorator((traceable(client=mock_client, enabled=True)((original_function))))
 
     result = wrapped_function(5)
 
@@ -2489,9 +2380,7 @@ class TestTraceableExceptionsToHandle:
     """Tests for the exceptions_to_handle parameter in @traceable decorator."""
 
     @pytest.mark.parametrize("auto_batch_tracing", [True, False])
-    @pytest.mark.parametrize(
-        "func_type", ["sync", "async", "generator", "async_generator"]
-    )
+    @pytest.mark.parametrize("func_type", ["sync", "async", "generator", "async_generator"])
     def test_handled_exceptions(self, auto_batch_tracing: bool, func_type: str):
         """exceptions_to_handle should suppress tracebacks for specified exceptions."""
         mock_client = _get_mock_client(
@@ -2557,9 +2446,7 @@ class TestTraceableExceptionsToHandle:
                     execute()
 
         num_calls = 1 if auto_batch_tracing else 2
-        mock_calls = _get_calls(
-            mock_client, verbs={"POST", "PATCH", "GET"}, minimum=num_calls
-        )
+        mock_calls = _get_calls(mock_client, verbs={"POST", "PATCH", "GET"}, minimum=num_calls)
         assert len(mock_calls) >= num_calls
 
         datas = _get_data(mock_calls)
@@ -2591,9 +2478,7 @@ class TestTraceableExceptionsToHandle:
                 f(langsmith_extra={"client": mock_client})
 
         # Verify that error is logged with traceback for unhandled exceptions
-        mock_calls = _get_calls(
-            mock_client, verbs={"POST", "PATCH", "GET"}, minimum=1, attempts=20
-        )
+        mock_calls = _get_calls(mock_client, verbs={"POST", "PATCH", "GET"}, minimum=1, attempts=20)
         datas = _get_data(mock_calls)
         found_error = False
         for _, payload in datas:
@@ -2635,9 +2520,7 @@ class TestTraceableExceptionsToHandle:
             # All handled exceptions should not have error field with traceback
             if payload.get("error") is not None:
                 err = payload.get("error")
-                pytest.fail(
-                    f"Expected error to be None for handled exception, got: {err}"
-                )
+                pytest.fail(f"Expected error to be None for handled exception, got: {err}")
 
 
 def test_ls_message_view_exclude_constant_is_exposed() -> None:
@@ -2697,15 +2580,9 @@ def test_ls_message_view_exclude_metadata_cascades_to_child_runs() -> None:
     payloads = [p for _, p in _get_data(mock_calls)]
     assert len(payloads) >= 2, f"expected parent + child payloads, got {len(payloads)}"
 
-    excluded = [
-        p
-        for p in payloads
-        if (p.get("extra") or {}).get("metadata", {}).get(LS_MESSAGE_VIEW_EXCLUDE)
-        is True
-    ]
+    excluded = [p for p in payloads if (p.get("extra") or {}).get("metadata", {}).get(LS_MESSAGE_VIEW_EXCLUDE) is True]
     assert len(excluded) == len(payloads), (
-        f"expected all {len(payloads)} runs to carry "
-        f"{LS_MESSAGE_VIEW_EXCLUDE}=True, only {len(excluded)} did"
+        f"expected all {len(payloads)} runs to carry {LS_MESSAGE_VIEW_EXCLUDE}=True, only {len(excluded)} did"
     )
 
 
@@ -2762,433 +2639,4 @@ def _clean_agent_addressing_env(monkeypatch: pytest.MonkeyPatch, **values: str) 
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     ls_utils.get_env_var.cache_clear()
-    ls_utils.get_tracer_agent_id.cache_clear()
-    ls_utils.get_tracer_agent_environment.cache_clear()
     ls_utils.get_tracer_project.cache_clear()
-
-
-class TestADistributedParentKeepsTheAgent:
-    """A parent built from headers must not default a project in.
-
-    A project there is never `None`, so it would suppress both the agent the
-    `baggage` header carries and the one in this process's environment, and
-    every hop would land in `default`.
-    """
-
-    @pytest.mark.parametrize("as_headers", [True, False], ids=["headers", "dotted"])
-    def test_the_hop_keeps_the_agent(
-        self, as_headers: bool, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _clean_agent_addressing_env(
-            monkeypatch,
-            LANGSMITH_AGENT_ID="env-agent",
-            LANGSMITH_AGENT_ENVIRONMENT="staging",
-        )
-        upstream = RunTree(name="a", inputs={})
-        parent: Any = (
-            dict(upstream.to_headers()) if as_headers else upstream.dotted_order
-        )
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable
-        def foo() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["value"] = (run.agent_id, run.agent_environment, run.session_name)
-
-        with tracing_context(enabled=True, client=mock_client):
-            foo(langsmith_extra={"parent": parent})
-
-        assert seen["value"] == ("env-agent", "staging", None)
-
-    def test_an_ambient_agent_does_not_hijack_a_baggage_project(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Only addressing named in code outranks the header.
-
-        `from_headers` reads an agent argument as the caller naming one, and
-        ignores a baggage project beside it. Passing this process's ambient
-        agent in would reroute a project-addressed upstream trace.
-        """
-        _clean_agent_addressing_env(monkeypatch)
-        upstream = dict(RunTree(name="a", project_name="upstream").to_headers())
-        _clean_agent_addressing_env(
-            monkeypatch,
-            LANGSMITH_AGENT_ID="ambient",
-            LANGSMITH_AGENT_ENVIRONMENT="staging",
-        )
-        parent = _get_parent_run(cast(Any, {"parent": upstream}))
-
-        assert parent is not None
-        assert (parent.session_name, parent.agent_id) == ("upstream", None)
-
-    def test_a_project_named_on_the_call_still_wins(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _clean_agent_addressing_env(
-            monkeypatch,
-            LANGSMITH_AGENT_ID="env-agent",
-            LANGSMITH_AGENT_ENVIRONMENT="staging",
-        )
-        parent = dict(RunTree(name="a", inputs={}).to_headers())
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable
-        def foo() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["value"] = (run.agent_id, run.session_name)
-
-        with tracing_context(enabled=True, client=mock_client):
-            foo(langsmith_extra={"parent": parent, "project_name": "named"})
-
-        assert seen["value"] == (None, "named")
-
-
-class TestRestoringAContextSnapshot:
-    """`tracing_context(**get_tracing_context(), project_name=...)` must work.
-
-    It is how the SDK carries a context across a thread or task -- `evaluate`
-    does it at four sites -- and it reaches `tracing_context` looking exactly
-    like a caller typing a project and an agent in one call.
-    """
-
-    def test_a_restored_snapshot_under_an_agent_does_not_raise(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _clean_agent_addressing_env(monkeypatch)
-        with tracing_context(agent_id="ambient", agent_environment="staging"):
-            snapshot = get_tracing_context()
-            with tracing_context(**{**snapshot, "project_name": "evaluators"}):
-                inner = get_tracing_context()
-
-        # The project named here wins, as it does over any other ambient agent.
-        assert inner["project_name"] == "evaluators"
-        assert (inner["agent_id"], inner["agent_environment"]) == (None, None)
-
-    def test_a_snapshot_without_a_project_keeps_its_agent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _clean_agent_addressing_env(monkeypatch)
-        with tracing_context(agent_id="ambient", agent_environment="staging"):
-            with tracing_context(**{**get_tracing_context(), "tags": ["t"]}):
-                inner = get_tracing_context()
-
-        assert inner["agent_id"] == "ambient"
-        assert inner["project_name"] is None
-
-    @pytest.mark.parametrize(
-        "ambient",
-        [{}, {"agent_id": "ambient", "agent_environment": "staging"}],
-        ids=["no_ambient_agent", "a_different_ambient_agent"],
-    )
-    def test_a_different_agent_beside_a_project_still_raises(
-        self, ambient: dict, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Only the pair already in the context is treated as inherited."""
-        _clean_agent_addressing_env(monkeypatch)
-        with tracing_context(**ambient):
-            with pytest.raises(ls_utils.LangSmithUserError, match="not both"):
-                with tracing_context(project_name="p", agent_id="named-here"):
-                    pass
-
-
-def test_an_evaluation_snapshot_drops_the_agent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An evaluation is project-addressed end to end, so no agent leaks in."""
-    from langsmith.evaluation._runner import _addressed_to_project
-
-    _clean_agent_addressing_env(monkeypatch)
-    with tracing_context(agent_id="ambient", agent_environment="staging"):
-        addressed = _addressed_to_project(get_tracing_context(), "evaluators")
-
-    assert addressed["project_name"] == "evaluators"
-    assert (addressed["agent_id"], addressed["agent_environment"]) == (None, None)
-
-
-class TestEveryEntryPointTakesAnAgent:
-    """`agent_id` / `agent_environment` sit beside `project_name` everywhere.
-
-    Each tier of the project chain has an agent counterpart resolved at the
-    same point, so an agent named where a project could have been named takes
-    effect there.
-    """
-
-    def test_the_decorator_takes_an_agent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _clean_agent_addressing_env(monkeypatch)
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable(agent_id="dec-agent", agent_environment="staging")
-        def foo() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["value"] = (run.agent_id, run.agent_environment, run.session_name)
-
-        with tracing_context(enabled=True, client=mock_client):
-            foo()
-
-        assert seen["value"] == ("dec-agent", "staging", None)
-
-    def test_langsmith_extra_takes_an_agent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """And beats one named at decoration, as a project there would."""
-        _clean_agent_addressing_env(monkeypatch)
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable(agent_id="dec-agent", agent_environment="staging")
-        def foo() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["value"] = (run.agent_id, run.agent_environment, run.session_name)
-
-        with tracing_context(enabled=True, client=mock_client):
-            foo(langsmith_extra={"agent_id": "extra-agent"})
-
-        assert seen["value"] == ("extra-agent", "staging", None)
-
-    def test_trace_takes_an_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _clean_agent_addressing_env(monkeypatch)
-        mock_client = _get_mock_client()
-        with tracing_context(enabled=True, client=mock_client):
-            with trace(
-                name="r", agent_id="trace-agent", agent_environment="staging"
-            ) as run:
-                assert (run.agent_id, run.agent_environment, run.session_name) == (
-                    "trace-agent",
-                    "staging",
-                    None,
-                )
-
-    def test_configure_takes_an_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _clean_agent_addressing_env(monkeypatch)
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable
-        def foo() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["value"] = (run.agent_id, run.agent_environment, run.session_name)
-
-        langsmith.configure(agent_id="cfg-agent", agent_environment="staging")
-        try:
-            with tracing_context(enabled=True, client=mock_client):
-                foo()
-        finally:
-            langsmith.configure(agent_id=None, agent_environment=None)
-
-        assert seen["value"] == ("cfg-agent", "staging", None)
-
-    @pytest.mark.parametrize(
-        "where",
-        ["context", "decorator", "langsmith_extra", "configure"],
-    )
-    def test_an_agent_named_in_code_beats_a_project_in_the_environment(
-        self, where: str, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The mirror of a project in code beating an agent in the environment.
-
-        Both modes travel together only when both come from the environment,
-        where there is no tier to choose between. Forwarding an env project
-        beside an agent named in code would earn a 400 and lose the trace.
-        """
-        _clean_agent_addressing_env(monkeypatch, LANGSMITH_PROJECT="env-proj")
-        mock_client = _get_mock_client()
-        agent = {"agent_id": "code-agent", "agent_environment": "staging"}
-        seen: dict = {}
-
-        def record() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["value"] = (run.agent_id, run.agent_environment, run.session_name)
-
-        foo = traceable(**agent)(record) if where == "decorator" else traceable(record)
-        if where == "configure":
-            langsmith.configure(**agent)
-        try:
-            with tracing_context(
-                enabled=True,
-                client=mock_client,
-                **(agent if where == "context" else {}),
-            ):
-                if where == "langsmith_extra":
-                    foo(langsmith_extra=agent)
-                else:
-                    foo()
-        finally:
-            if where == "configure":
-                langsmith.configure(agent_id=None, agent_environment=None)
-
-        assert seen["value"] == ("code-agent", "staging", None)
-
-    def test_both_from_the_environment_travel_together(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Neither is named in code, so the endpoint arbitrates, not the SDK."""
-        _clean_agent_addressing_env(
-            monkeypatch,
-            LANGSMITH_AGENT_ID="env-agent",
-            LANGSMITH_AGENT_ENVIRONMENT="staging",
-            LANGSMITH_PROJECT="env-proj",
-        )
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable
-        def foo() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["value"] = (run.agent_id, run.agent_environment, run.session_name)
-
-        with tracing_context(enabled=True, client=mock_client):
-            foo()
-
-        assert seen["value"] == ("env-agent", "staging", "env-proj")
-
-    def test_a_project_named_in_the_same_call_is_rejected(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """One call naming two destinations is the SDK's one rejection."""
-        _clean_agent_addressing_env(monkeypatch)
-        with pytest.raises(ls_utils.LangSmithUserError, match="not both"):
-            traceable(project_name="p", agent_id="a")
-        with pytest.raises(ls_utils.LangSmithUserError, match="not both"):
-            trace(name="r", project_name="p", agent_id="a")
-        with pytest.raises(ls_utils.LangSmithUserError, match="not both"):
-            langsmith.configure(project_name="p", agent_id="a")
-
-        mock_client = _get_mock_client()
-
-        @traceable
-        def foo() -> None:
-            pass
-
-        with pytest.raises(ls_utils.LangSmithUserError, match="not both"):
-            with tracing_context(enabled=True, client=mock_client):
-                foo(langsmith_extra={"project_name": "p", "agent_id": "a"})
-
-
-class TestTracingContextAgentAddressing:
-    """`tracing_context` can address runs by agent instead of project."""
-
-    def test_agent_id_addresses_the_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _clean_agent_addressing_env(monkeypatch)
-        mock_client = _get_mock_client()
-        with tracing_context(
-            enabled=True, agent_id="ctx-agent", agent_environment="staging"
-        ):
-            with trace(name="foo", inputs={"a": 1}, client=mock_client) as run:
-                assert run.agent_id == "ctx-agent"
-                assert run.agent_environment == "staging"
-                assert run.session_name is None
-
-    def test_naming_both_in_one_context_is_rejected(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A single context sets one destination, not two."""
-        _clean_agent_addressing_env(monkeypatch)
-        with pytest.raises(ls_utils.LangSmithUserError, match="not both"):
-            with tracing_context(
-                enabled=True, project_name="explicit", agent_id="ctx-agent"
-            ):
-                pass
-
-    def test_traceable__is_agent_addressed_from_the_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The decorator path has to honor it too, not just `trace`."""
-        _clean_agent_addressing_env(monkeypatch, LANGSMITH_AGENT_ID="env-agent")
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable
-        def foo(a: int) -> int:
-            run = get_current_run_tree()
-            seen["agent_id"] = run.agent_id if run else None
-            seen["session_name"] = run.session_name if run else None
-            return a
-
-        with tracing_context(enabled=True, client=mock_client):
-            foo(1)
-
-        assert seen == {"agent_id": "env-agent", "session_name": None}
-
-    def test_traceable_forwards_a_lone_agent_environment(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Half a pair must reach the endpoint, not fall into `default`.
-
-        `_setup_run` resolves addressing itself, so the decorator needs the same
-        either-half rule as `trace` and `RunTree`.
-        """
-        _clean_agent_addressing_env(monkeypatch, LANGSMITH_AGENT_ENVIRONMENT="staging")
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable
-        def foo() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["agent_environment"] = run.agent_environment
-            seen["session_name"] = run.session_name
-
-        with tracing_context(enabled=True, client=mock_client):
-            foo()
-
-        assert seen == {"agent_environment": "staging", "session_name": None}
-
-    def test_traceable_keeps_a_configured_project_beside_the_agent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Both travel so the endpoint refuses the pair, rather than the SDK
-        quietly moving the trace to the agent."""
-        _clean_agent_addressing_env(
-            monkeypatch,
-            LANGSMITH_AGENT_ID="env-agent",
-            LANGSMITH_PROJECT="env-proj",
-        )
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable
-        def foo() -> None:
-            run = get_current_run_tree()
-            assert run is not None
-            seen["agent_id"] = run.agent_id
-            seen["session_name"] = run.session_name
-
-        with tracing_context(enabled=True, client=mock_client):
-            foo()
-
-        assert seen == {"agent_id": "env-agent", "session_name": "env-proj"}
-
-    def test_nested_traceables_inherit_agent_addressing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _clean_agent_addressing_env(monkeypatch)
-        mock_client = _get_mock_client()
-        seen: dict = {}
-
-        @traceable
-        def child(a: int) -> int:
-            run = get_current_run_tree()
-            seen["child_agent_id"] = run.agent_id if run else None
-            seen["child_session_name"] = run.session_name if run else None
-            return a
-
-        @traceable
-        def parent(a: int) -> int:
-            return child(a)
-
-        with tracing_context(enabled=True, client=mock_client, agent_id="ctx-agent"):
-            parent(1)
-
-        assert seen == {"child_agent_id": "ctx-agent", "child_session_name": None}

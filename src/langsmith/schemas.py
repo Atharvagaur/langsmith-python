@@ -9,6 +9,7 @@ from enum import Enum
 from html import escape as _html_escape
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     NamedTuple,
@@ -27,8 +28,13 @@ from pydantic import (
     StrictBool,
     StrictFloat,
     StrictInt,
+    field_validator,
 )
 from typing_extensions import Literal, NotRequired, TypedDict
+
+if TYPE_CHECKING:
+    # Type-checking only: `_address` imports `utils`, which imports this module.
+    from langsmith._address import Address
 
 SCORE_TYPE = Union[StrictBool, StrictInt, StrictFloat, None]
 VALUE_TYPE = Union[dict, str, StrictBool, StrictInt, StrictFloat, None]
@@ -95,9 +101,7 @@ class _AttachmentDict(TypedDict):
     data: Union[bytes, Path]
 
 
-_AttachmentLike = Union[
-    Attachment, _AttachmentDict, tuple[str, bytes], tuple[str, Path]
-]
+_AttachmentLike = Union[Attachment, _AttachmentDict, tuple[str, bytes], tuple[str, Path]]
 
 
 class ExampleCreate(BaseModel):
@@ -140,9 +144,7 @@ class Example(ExampleBase):
     """Example model."""
 
     id: UUID
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.fromtimestamp(0, tz=timezone.utc)
-    )
+    created_at: datetime = Field(default_factory=lambda: datetime.fromtimestamp(0, tz=timezone.utc))
     dataset_id: UUID = Field(default=UUID("00000000-0000-0000-0000-000000000000"))
     modified_at: Optional[datetime] = Field(default=None)
     source_run_id: Optional[UUID] = None
@@ -181,12 +183,8 @@ class Example(ExampleBase):
 class AttachmentsOperations(BaseModel):
     """Operations to perform on attachments."""
 
-    rename: dict[str, str] = Field(
-        default_factory=dict, description="Mapping of old attachment names to new names"
-    )
-    retain: list[str] = Field(
-        default_factory=list, description="List of attachment names to keep"
-    )
+    rename: dict[str, str] = Field(default_factory=dict, description="Mapping of old attachment names to new names")
+    retain: list[str] = Field(default_factory=list, description="List of attachment names to keep")
 
 
 class ExampleUpdate(BaseModel):
@@ -357,9 +355,7 @@ class RunBase(BaseModel):
     tags: Optional[list[str]] = None
     """Tags for categorizing or annotating the run."""
 
-    attachments: Union[Attachments, dict[str, AttachmentInfo]] = Field(
-        default_factory=dict
-    )
+    attachments: Union[Attachments, dict[str, AttachmentInfo]] = Field(default_factory=dict)
     """Attachments associated with the run.
 
     Each entry is a tuple of `(mime_type, bytes)`.
@@ -538,14 +534,7 @@ class RunTypeEnum(str, Enum):
 
 
 class RunLikeDict(TypedDict, total=False):
-    """Run-like dictionary, for type-hinting.
-
-    !!! warning "Experimental"
-        `agent_id` and `agent_environment` are in beta. Agent addressing is
-        enabled per workspace; a workspace without it rejects the runs, so
-        tracing is lost rather than falling back to a project. Both keys may
-        change without notice.
-    """
+    """Run-like dictionary, for type-hinting."""
 
     name: str
     run_type: RunTypeEnum
@@ -565,8 +554,8 @@ class RunLikeDict(TypedDict, total=False):
     id: Optional[UUID]
     session_id: Optional[UUID]
     session_name: Optional[str]
-    agent_id: Optional[str]
-    agent_environment: Optional[str]
+    address: Optional[Address]
+    """(beta) An address to send the run to, instead of a project."""
     reference_example_id: Optional[UUID]
     input_attachments: Optional[dict]
     output_attachments: Optional[dict]
@@ -623,15 +612,7 @@ class FeedbackSourceType(Enum):
 
 
 class FeedbackBase(BaseModel):
-    """Feedback schema.
-
-    !!! warning "Experimental"
-        `agent_id` / `agent_environment` are in beta. Agent addressing is
-        enabled per workspace; a workspace without it rejects the feedback,
-        so it is lost rather than falling back to a project. The agent must
-        already exist -- unlike run ingestion, a feedback part never creates
-        one. Both may change without notice.
-    """
+    """Feedback schema."""
 
     id: UUID
     """The unique ID of the feedback."""
@@ -657,16 +638,6 @@ class FeedbackBase(BaseModel):
     """The source of the feedback."""
     session_id: Optional[UUID] = None
     """The associated project ID (Session = Project) this feedback is logged for."""
-    agent_id: Optional[str] = None
-    """The agent this feedback is logged for, instead of a project.
-
-    Copied from the run the feedback describes, never read from the environment:
-    feedback follows its run, so an ambient `LANGSMITH_AGENT_ID` must not
-    redirect it somewhere the run never went. Mutually exclusive with
-    `session_id`.
-    """
-    agent_environment: Optional[str] = None
-    """Narrows `agent_id`; meaningless without it."""
     start_time: Optional[datetime] = None
     """The start time of the run this feedback is associated with."""
     comparative_experiment_id: Optional[UUID] = None
@@ -714,6 +685,27 @@ class FeedbackCreate(FeedbackBase):
     extend_trace_retention: bool = True
     """When true, extend trace retention as a side effect of creating this feedback."""
     error: Optional[bool] = None
+    if TYPE_CHECKING:
+        address: Optional[Address] = None
+    else:
+        # `Address` can't be imported here at runtime (see the import above),
+        # so the field is declared loosely and checked by `_check_address`.
+        address: Optional[Any] = Field(default=None, exclude=True)
+    """(beta) An address, rendered into its wire fields on dump."""
+
+    @field_validator("address")
+    @classmethod
+    def _check_address(cls, value: Any) -> Optional[Address]:
+        from langsmith._internal._agent_addressing import check_address
+
+        return check_address(value)
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Dump, with `address` unpacked into its wire fields."""
+        dumped = super().model_dump(**kwargs)
+        if self.address is not None:
+            dumped.update(self.address._to_wire())
+        return dumped
 
 
 class Feedback(FeedbackBase):
@@ -1576,9 +1568,7 @@ class _ClusterWithTraces:
         """Fetch run dicts for this cluster from the API."""
         client = getattr(self._report, "_client", None)
         if client is None:
-            raise ValueError(
-                "Report not attached to a client; get reports via Client.get_insights_report()"
-            )
+            raise ValueError("Report not attached to a client; get reports via Client.get_insights_report()")
         session_id = getattr(self._report, "_session_id", None)
         job_id = getattr(self._report, "_job_id", None)
         if session_id is None or job_id is None:
@@ -1611,9 +1601,7 @@ class _ClustersMap:
         else:
             by_name = {c.name: c for c in self._clusters}
             if key not in by_name:
-                raise KeyError(
-                    f"Cluster {key!r} not found; available: {list(by_name.keys())}"
-                )
+                raise KeyError(f"Cluster {key!r} not found; available: {list(by_name.keys())}")
             cluster = by_name[key]
         return _ClusterWithTraces(cluster, self._report)
 
@@ -1714,9 +1702,7 @@ class FeedbackFormulaCreate(BaseModel):
     session_id: Optional[UUID] = None
     feedback_key: str
     aggregation_type: Literal["sum", "avg"]
-    formula_parts: list[FeedbackFormulaWeightedVariable] = Field(
-        ..., min_length=1, max_length=50
-    )
+    formula_parts: list[FeedbackFormulaWeightedVariable] = Field(..., min_length=1, max_length=50)
 
 
 class FeedbackFormulaUpdate(BaseModel):
@@ -1732,9 +1718,7 @@ class FeedbackFormulaUpdate(BaseModel):
 
     feedback_key: str
     aggregation_type: Literal["sum", "avg"]
-    formula_parts: list[FeedbackFormulaWeightedVariable] = Field(
-        ..., min_length=1, max_length=50
-    )
+    formula_parts: list[FeedbackFormulaWeightedVariable] = Field(..., min_length=1, max_length=50)
 
 
 class FeedbackFormula(FeedbackFormulaCreate):

@@ -280,9 +280,7 @@ def test_distributed_tracing_remap_for_project():
         assert len(parsed_order) == 1
 
         updates_no_dist = {"reroot": False}
-        remapped_dict_no_dist = child._remap_for_project(
-            "child_project_2", updates_no_dist
-        )
+        remapped_dict_no_dist = child._remap_for_project("child_project_2", updates_no_dist)
         assert remapped_dict_no_dist.get("parent_run_id") is not None
         remapped_dict_no_updates = child._remap_for_project("child_project_3", None)
 
@@ -321,18 +319,12 @@ def test_distributed_parent_id_from_headers():
 
     remapped_dict = new_run._remap_for_project("child_project", {"reroot": True})
 
-    assert remapped_dict.get("parent_run_id") is None, (
-        "Run should be rerooted with no parent"
-    )
+    assert remapped_dict.get("parent_run_id") is None, "Run should be rerooted with no parent"
 
     parsed_order = run_trees._parse_dotted_order(remapped_dict["dotted_order"])
-    assert len(parsed_order) == 1, (
-        f"Expected 1 segment after rerooting, got {len(parsed_order)}"
-    )
+    assert len(parsed_order) == 1, f"Expected 1 segment after rerooting, got {len(parsed_order)}"
 
-    assert remapped_dict["trace_id"] == new_run.id, (
-        "Trace ID should be the new run's ID after rerooting"
-    )
+    assert remapped_dict["trace_id"] == new_run.id, "Trace ID should be the new run's ID after rerooting"
 
     assert str(current_distributed_parent_id) == str(child.id), (
         f"Distributed parent ID should be the immediate parent from headers! "
@@ -568,9 +560,7 @@ def test_from_headers_filters_replica_credentials():
 
 
 def test_from_headers_drops_non_boolean_replica_primary():
-    replicas_json = json.dumps(
-        [{"project_name": "replica-project", "primary": "false"}]
-    )
+    replicas_json = json.dumps([{"project_name": "replica-project", "primary": "false"}])
     baggage = f"langsmith-replicas={urllib.parse.quote(replicas_json)}"
     headers = {
         "langsmith-trace": "20240101T000000000000Z00000000-0000-0000-0000-000000000001",
@@ -656,9 +646,7 @@ def test_sanitize_header_updates_env_override_keeps_reroot(monkeypatch):
     monkeypatch.setenv("LANGSMITH_BAGGAGE_ALLOWED_UPDATE_FIELDS", "environment")
     run_trees.utils.get_env_var.cache_clear()
     try:
-        result = run_trees._sanitize_header_updates(
-            {"reroot": True, "environment": "prod", "metadata": {"k": "v"}}
-        )
+        result = run_trees._sanitize_header_updates({"reroot": True, "environment": "prod", "metadata": {"k": "v"}})
         # `environment` now allowed, `reroot` always kept, default `metadata` dropped.
         assert result == {"reroot": True, "environment": "prod"}
     finally:
@@ -669,9 +657,7 @@ def test_sanitize_header_updates_warns_on_dropped_fields(caplog):
     """Dropping a non-allow-listed field logs one actionable warning."""
     run_trees.utils.get_env_var.cache_clear()
     with caplog.at_level(logging.WARNING, logger="langsmith.run_trees"):
-        run_trees._sanitize_header_updates(
-            {"reroot": True, "attachments": {"doc": ["text/plain", "notes.txt"]}}
-        )
+        run_trees._sanitize_header_updates({"reroot": True, "attachments": {"doc": ["text/plain", "notes.txt"]}})
     assert len(caplog.records) == 1
     message = caplog.records[0].getMessage()
     assert "attachments" in message
@@ -707,9 +693,7 @@ def test_runtree_accepts_pydantic_basemodel_as_constructor_outputs():
     class MyOutput(PydanticBaseModel):
         answer: str
 
-    rt = RunTree(
-        name="test", run_type="chain", inputs={}, outputs=MyOutput(answer="hi")
-    )
+    rt = RunTree(name="test", run_type="chain", inputs={}, outputs=MyOutput(answer="hi"))
     assert rt.outputs == {"answer": "hi"}
 
 
@@ -795,9 +779,7 @@ def test_patch_exclude_inputs_env_flag(
     _reset_exclude_inputs_cache()
 
     client = MagicMock()
-    run_tree = RunTree(
-        name="test_run", run_type="chain", inputs={"a": 1}, client=client
-    )
+    run_tree = RunTree(name="test_run", run_type="chain", inputs={"a": 1}, client=client)
     run_tree.patch(**({} if explicit is None else {"exclude_inputs": explicit}))
 
     sent = client.update_run.call_args.kwargs["inputs"]
@@ -807,9 +789,7 @@ def test_patch_exclude_inputs_env_flag(
         assert sent is None
 
 
-def test_patch_exclude_inputs_env_flag_with_replicas(
-    monkeypatch, _reset_exclude_inputs_cache
-):
+def test_patch_exclude_inputs_env_flag_with_replicas(monkeypatch, _reset_exclude_inputs_cache):
     """The replica patch path honours the flag as well."""
     monkeypatch.setenv("LANGSMITH_EXCLUDE_INPUTS_ON_PATCH", "true")
     _reset_exclude_inputs_cache()
@@ -835,9 +815,7 @@ def test_patch_exclude_inputs_flag_is_cached(monkeypatch, _reset_exclude_inputs_
     _reset_exclude_inputs_cache()
 
     client = MagicMock()
-    run_tree = RunTree(
-        name="test_run", run_type="chain", inputs={"a": 1}, client=client
-    )
+    run_tree = RunTree(name="test_run", run_type="chain", inputs={"a": 1}, client=client)
     run_tree.patch()
     assert client.update_run.call_args.kwargs["inputs"] is None
 
@@ -857,8 +835,6 @@ def _reset_agent_addressing_cache():
 
     def _clear():
         ls_utils.get_env_var.cache_clear()
-        ls_utils.get_tracer_agent_id.cache_clear()
-        ls_utils.get_tracer_agent_environment.cache_clear()
         ls_utils.get_tracer_project.cache_clear()
 
     _clear()
@@ -880,187 +856,8 @@ def _agent_env(monkeypatch: pytest.MonkeyPatch, **values: str) -> None:
         monkeypatch.setenv(name, value)
 
 
-class TestRunTreeAgentAddressing:
-    """A run tree carries one addressing mode: project or agent, never both."""
-
-    def test_agent_env_replaces_the_default_project(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(
-            monkeypatch,
-            LANGSMITH_AGENT_ID="my-agent",
-            LANGSMITH_AGENT_ENVIRONMENT="staging",
-        )
-        _reset_agent_addressing_cache()
-        run = RunTree(name="foo", ls_client=_get_mock_client())
-        assert run.agent_id == "my-agent"
-        assert run.agent_environment == "staging"
-        assert run.session_name is None
-
-    def test_explicit_project_wins_over_the_agent_env(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(monkeypatch, LANGSMITH_AGENT_ID="my-agent")
-        _reset_agent_addressing_cache()
-        run = RunTree(name="foo", project_name="explicit", ls_client=_get_mock_client())
-        assert run.session_name == "explicit"
-        assert run.agent_id is None
-        assert run.agent_environment is None
-
-    def test_agent_environment_alone_is_forwarded(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        """Half a pair travels, for the endpoint to reject with its own 400.
-
-        Dropping it would fall back to the `default` project, so a typo would
-        quietly succeed somewhere the caller never named.
-        """
-        _agent_env(monkeypatch, LANGSMITH_AGENT_ENVIRONMENT="staging")
-        _reset_agent_addressing_cache()
-        run = RunTree(name="foo", ls_client=_get_mock_client())
-        assert run.agent_environment == "staging"
-        assert run.agent_id is None
-        assert run.session_name is None
-
-    def test_children_inherit_agent_addressing(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(
-            monkeypatch,
-            LANGSMITH_AGENT_ID="my-agent",
-            LANGSMITH_AGENT_ENVIRONMENT="staging",
-        )
-        _reset_agent_addressing_cache()
-        parent = RunTree(name="parent", ls_client=_get_mock_client())
-        child = parent.create_child(name="child")
-        assert child.agent_id == "my-agent"
-        assert child.agent_environment == "staging"
-        assert child.session_name is None
-
-    def test_children_of_a_project_run_stay_project_addressed(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(monkeypatch, LANGSMITH_AGENT_ID="my-agent")
-        _reset_agent_addressing_cache()
-        parent = RunTree(
-            name="parent", project_name="explicit", ls_client=_get_mock_client()
-        )
-        child = parent.create_child(name="child")
-        assert child.session_name == "explicit"
-        assert child.agent_id is None
-
-
-class TestReplicaAgentAddressing:
-    """Addressing precedence applies per replica."""
-
-    def test_a_replica_naming_both_is_rejected(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        """One replica, one destination: naming both is a contradiction."""
-        _agent_env(monkeypatch)
-        _reset_agent_addressing_cache()
-        run = RunTree(name="foo", ls_client=_get_mock_client())
-        with pytest.raises(ls_utils.LangSmithUserError, match="not both"):
-            run._replica_addressing({"project_name": "proj", "agent_id": "a"})
-
-    def test_replica_agent_is_used_when_it_names_no_project(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(monkeypatch)
-        _reset_agent_addressing_cache()
-        run = RunTree(name="foo", ls_client=_get_mock_client())
-        assert run._replica_addressing(
-            {"agent_id": "replica-agent", "agent_environment": "staging"}
-        ) == (None, "replica-agent", "staging")
-
-    def test_replica_naming_neither_inherits_the_run_tree(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(monkeypatch, LANGSMITH_AGENT_ID="my-agent")
-        _reset_agent_addressing_cache()
-        run = RunTree(name="foo", ls_client=_get_mock_client())
-        assert run._replica_addressing({}) == (None, "my-agent", None)
-
-    def test_agent_addressed_replicas_get_distinct_run_ids(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        """Two agents are two destinations, so the derived IDs must differ."""
-        _agent_env(monkeypatch)
-        _reset_agent_addressing_cache()
-        run = RunTree(name="foo", ls_client=_get_mock_client())
-        first = run._remap_for_project(None, agent_id="agent-a")
-        second = run._remap_for_project(None, agent_id="agent-b")
-        assert first["id"] != second["id"]
-        assert first["agent_id"] == "agent-a"
-        assert second["agent_id"] == "agent-b"
-        assert first["session_name"] is None
-
-
 class TestBaggageAgentAddressing:
     """Agent addressing survives a distributed hop, like the project does."""
-
-    def test_round_trips_through_baggage(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(
-            monkeypatch,
-            LANGSMITH_AGENT_ID="my-agent",
-            LANGSMITH_AGENT_ENVIRONMENT="staging",
-        )
-        _reset_agent_addressing_cache()
-        parent = RunTree(name="parent", ls_client=_get_mock_client())
-        headers = parent.to_headers()
-
-        # The child process has no agent env of its own.
-        _agent_env(monkeypatch)
-        _reset_agent_addressing_cache()
-        child = RunTree.from_headers(headers, name="child")
-        assert child is not None
-        assert child.agent_id == "my-agent"
-        assert child.agent_environment == "staging"
-        assert child.session_name is None
-
-    def test_baggage_project_still_wins(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(monkeypatch)
-        _reset_agent_addressing_cache()
-        # `from_headers` needs the trace header to reconstruct a parent at all,
-        # so start from a real one and swap in just the baggage under test.
-        headers = dict(RunTree(name="parent", project_name="p").to_headers())
-        headers["baggage"] = ",".join(
-            [
-                f"{run_trees.LANGSMITH_PROJECT}=from-header",
-                f"{run_trees.LANGSMITH_AGENT_ID}=agent-from-header",
-            ]
-        )
-        child = RunTree.from_headers(headers, name="child")
-        assert child is not None
-        assert child.session_name == "from-header"
-        assert child.agent_id is None
-
-    def test_project_addressed_parent_sends_no_agent_keys(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        _agent_env(monkeypatch)
-        _reset_agent_addressing_cache()
-        parent = RunTree(
-            name="parent", project_name="proj", ls_client=_get_mock_client()
-        )
-        baggage = parent.to_headers()["baggage"]
-        assert run_trees.LANGSMITH_AGENT_ID not in baggage
-        assert run_trees.LANGSMITH_AGENT_ENVIRONMENT not in baggage
-
-    def test_agent_addressed_replica_survives_the_hop(self) -> None:
-        """Replicas used to be dropped unless they named a project."""
-        replicas_json = json.dumps(
-            [{"agent_id": "replica-agent", "agent_environment": "staging"}]
-        )
-        baggage = f"{run_trees.LANGSMITH_REPLICAS}={urllib.parse.quote(replicas_json)}"
-        parsed = run_trees._Baggage.from_header(baggage)
-        assert parsed.replicas is not None
-        assert len(parsed.replicas) == 1
-        assert parsed.replicas[0]["agent_id"] == "replica-agent"
 
     def test_replica_credentials_are_still_stripped(self) -> None:
         replicas_json = json.dumps(
@@ -1081,26 +878,3 @@ class TestBaggageAgentAddressing:
         replica = parsed.replicas[0]
         assert "api_key" not in replica
         assert "api_url" not in replica
-
-
-class TestBaggageProjectVersusCallerAgent:
-    """A header must not be able to raise on the receiver, in either direction."""
-
-    def test_a_baggage_project_is_ignored_when_the_caller_named_an_agent(
-        self, monkeypatch: pytest.MonkeyPatch, _reset_agent_addressing_cache
-    ) -> None:
-        """The mirror of the guard for a baggage agent vs a caller project.
-
-        Without this, any caller passing `agent_id=` to `from_headers` handed a
-        remote peer a one-header way to break the request handler.
-        """
-        _agent_env(monkeypatch)
-        _reset_agent_addressing_cache()
-        headers = dict(RunTree(name="p", project_name="p-local").to_headers())
-        headers["baggage"] = f"{run_trees.LANGSMITH_PROJECT}=attacker"
-        child = RunTree.from_headers(
-            headers, name="c", agent_id="a", agent_environment="e"
-        )
-        assert child is not None
-        assert child.agent_id == "a"
-        assert child.session_name is None

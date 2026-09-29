@@ -24,9 +24,7 @@ from langsmith.run_helpers import get_current_run_tree, tracing_context
 
 class LangSmithProjectNameTest(unittest.TestCase):
     class GetTracerProjectTestCase:
-        def __init__(
-            self, test_name, envvars, expected_project_name, return_default_value=None
-        ):
+        def __init__(self, test_name, envvars, expected_project_name, return_default_value=None):
             self.test_name = test_name
             self.envvars = envvars
             self.expected_project_name = expected_project_name
@@ -41,14 +39,12 @@ class LangSmithProjectNameTest(unittest.TestCase):
                 expected_project_name="default",
             ),
             self.GetTracerProjectTestCase(
-                test_name="default to 'default' when "
-                + "return_default_value=True and no project provided",
+                test_name="default to 'default' when " + "return_default_value=True and no project provided",
                 envvars={},
                 expected_project_name="default",
             ),
             self.GetTracerProjectTestCase(
-                test_name="do not default if return_default_value=False "
-                + "when no project provided",
+                test_name="do not default if return_default_value=False " + "when no project provided",
                 envvars={},
                 expected_project_name=None,
                 return_default_value=False,
@@ -93,50 +89,9 @@ class LangSmithProjectNameTest(unittest.TestCase):
                     self.assertEqual(project, case.expected_project_name)
 
 
-@pytest.mark.parametrize(
-    ("getter_name", "suffix"),
-    [
-        ("get_tracer_agent_environment", "AGENT_ENVIRONMENT"),
-        ("get_tracer_agent_id", "AGENT_ID"),
-    ],
-)
-@pytest.mark.parametrize(
-    ("namespaces", "expected"),
-    [
-        ({}, None),
-        ({"LANGSMITH": "from-langsmith"}, "from-langsmith"),
-        # The agent variables are LANGSMITH_-only: the legacy LANGCHAIN_
-        # namespace is not taking new members, so that spelling is not read.
-        ({"LANGCHAIN": "from-langchain"}, None),
-        (
-            {"LANGSMITH": "from-langsmith", "LANGCHAIN": "from-langchain"},
-            "from-langsmith",
-        ),
-        # Blank is treated as unset, same as every other LangSmith env var.
-        ({"LANGSMITH": ""}, None),
-        ({"LANGSMITH": "", "LANGCHAIN": "from-langchain"}, None),
-    ],
-)
-def test_get_tracer_agent_env_vars(
-    getter_name: str,
-    suffix: str,
-    namespaces: dict,
-    expected: Optional[str],
-) -> None:
-    """`LANGSMITH_AGENT_ENVIRONMENT` / `LANGSMITH_AGENT_ID` resolution."""
-    getter = getattr(ls_utils, getter_name)
-    envvars = {f"{ns}_{suffix}": value for ns, value in namespaces.items()}
-    ls_utils.get_env_var.cache_clear()
-    getter.cache_clear()
-    with patch.dict("os.environ", envvars, clear=True):
-        assert getter() == expected
-
-
 def test_tracing_enabled():
     ls_utils.get_env_var.cache_clear()
-    with patch.dict(
-        "os.environ", {"LANGCHAIN_TRACING_V2": "false", "LANGSMITH_TRACING": "false"}
-    ):
+    with patch.dict("os.environ", {"LANGCHAIN_TRACING_V2": "false", "LANGSMITH_TRACING": "false"}):
         assert not ls_utils.tracing_is_enabled()
         with tracing_context(enabled=True):
             assert ls_utils.tracing_is_enabled()
@@ -180,18 +135,14 @@ def test_tracing_enabled():
             return untraced_child_function()
 
     ls_utils.get_env_var.cache_clear()
-    with patch.dict(
-        "os.environ", {"LANGCHAIN_TRACING_V2": "true", "LANGSMITH_TRACING": "true"}
-    ):
+    with patch.dict("os.environ", {"LANGCHAIN_TRACING_V2": "true", "LANGSMITH_TRACING": "true"}):
         mock_client = MagicMock(spec=Client)
         parent_function(langsmith_extra={"client": mock_client})
 
 
 def test_tracing_disabled():
     ls_utils.get_env_var.cache_clear()
-    with patch.dict(
-        "os.environ", {"LANGCHAIN_TRACING_V2": "true", "LANGSMITH_TRACING": "true"}
-    ):
+    with patch.dict("os.environ", {"LANGCHAIN_TRACING_V2": "true", "LANGSMITH_TRACING": "true"}):
         assert ls_utils.tracing_is_enabled()
         with tracing_context(enabled=False):
             assert not ls_utils.tracing_is_enabled()
@@ -454,9 +405,7 @@ def test_get_func_name():
 def test_get_host_url():
     # If web_url is explicitly provided, it takes precedence over api_url.
     assert (
-        ls_utils.get_host_url(
-            "https://my-custom-web.com", "https://api.smith.langchain.com"
-        )
+        ls_utils.get_host_url("https://my-custom-web.com", "https://api.smith.langchain.com")
         == "https://my-custom-web.com"
     )
 
@@ -468,52 +417,28 @@ def test_get_host_url():
     )
 
     # If api_url path ends with /api, trimmed back to netloc.
-    assert (
-        ls_utils.get_host_url(None, "https://my-awesome-domain.com/api")
-        == "https://my-awesome-domain.com"
-    )
+    assert ls_utils.get_host_url(None, "https://my-awesome-domain.com/api") == "https://my-awesome-domain.com"
 
     # If api_url path ends with /api/v1, trimmed back to netloc.
-    assert (
-        ls_utils.get_host_url(None, "https://my-other-domain.com/api/v1")
-        == "https://my-other-domain.com"
-    )
+    assert ls_utils.get_host_url(None, "https://my-other-domain.com/api/v1") == "https://my-other-domain.com"
 
     # If netloc begins with dev.
-    assert (
-        ls_utils.get_host_url(None, "https://dev.smith.langchain.com/api/v1")
-        == "https://dev.smith.langchain.com"
-    )
+    assert ls_utils.get_host_url(None, "https://dev.smith.langchain.com/api/v1") == "https://dev.smith.langchain.com"
 
     # If netloc begins with eu.
-    assert (
-        ls_utils.get_host_url(None, "https://eu.smith.langchain.com/api")
-        == "https://eu.smith.langchain.com"
-    )
+    assert ls_utils.get_host_url(None, "https://eu.smith.langchain.com/api") == "https://eu.smith.langchain.com"
 
     # If netloc begins with beta.
-    assert (
-        ls_utils.get_host_url(None, "https://beta.smith.langchain.com")
-        == "https://beta.smith.langchain.com"
-    )
+    assert ls_utils.get_host_url(None, "https://beta.smith.langchain.com") == "https://beta.smith.langchain.com"
 
     # If netloc begins with apac.
-    assert (
-        ls_utils.get_host_url(None, "https://apac.api.smith.langchain.com/v1")
-        == "https://apac.smith.langchain.com"
-    )
+    assert ls_utils.get_host_url(None, "https://apac.api.smith.langchain.com/v1") == "https://apac.smith.langchain.com"
 
     # If netloc begins with api.
-    assert (
-        ls_utils.get_host_url(None, "https://api.smith.langchain.com")
-        == "https://smith.langchain.com"
-    )
+    assert ls_utils.get_host_url(None, "https://api.smith.langchain.com") == "https://smith.langchain.com"
 
     # Otherwise, returns https://smith.langchain.com for unknown host.
-    assert (
-        ls_utils.get_host_url(None, "https://unknownhost.com")
-        == "https://smith.langchain.com"
-    )
+    assert ls_utils.get_host_url(None, "https://unknownhost.com") == "https://smith.langchain.com"
 
 
 class MockRequest:
@@ -545,9 +470,7 @@ def test_filter_request_headers_allow_hosts():
 
     # Test matching full URL
     request = MockRequest("https://api.example.com/test")
-    result = ls_utils.filter_request_headers(
-        request, allow_hosts=["https://api.example.com"]
-    )
+    result = ls_utils.filter_request_headers(request, allow_hosts=["https://api.example.com"])
     assert result is request
 
     # Test subdomain matching
@@ -562,23 +485,17 @@ def test_filter_request_headers_allow_hosts():
 
     # Test multiple allow hosts - matching first
     request = MockRequest("https://api.first.com/test")
-    result = ls_utils.filter_request_headers(
-        request, allow_hosts=["api.first.com", "api.second.com"]
-    )
+    result = ls_utils.filter_request_headers(request, allow_hosts=["api.first.com", "api.second.com"])
     assert result is request
 
     # Test multiple allow hosts - matching second
     request = MockRequest("https://api.second.com/test")
-    result = ls_utils.filter_request_headers(
-        request, allow_hosts=["api.first.com", "api.second.com"]
-    )
+    result = ls_utils.filter_request_headers(request, allow_hosts=["api.first.com", "api.second.com"])
     assert result is request
 
     # Test multiple allow hosts - not matching any
     request = MockRequest("https://api.third.com/test")
-    result = ls_utils.filter_request_headers(
-        request, allow_hosts=["api.first.com", "api.second.com"]
-    )
+    result = ls_utils.filter_request_headers(request, allow_hosts=["api.first.com", "api.second.com"])
     assert result is None
 
 
@@ -590,9 +507,7 @@ def test_filter_request_headers_url_parsing_error():
             self.headers = {"Authorization": "Bearer token"}
 
     # Mock urllib_parse.urlparse to raise an exception
-    with patch(
-        "langsmith.utils.urllib_parse.urlparse", side_effect=Exception("Parse error")
-    ):
+    with patch("langsmith.utils.urllib_parse.urlparse", side_effect=Exception("Parse error")):
         request = BadRequest("not-a-valid-url")
         result = ls_utils.filter_request_headers(request, allow_hosts=["example.com"])
         assert result is None
@@ -633,9 +548,7 @@ def test_filter_request_headers_edge_cases():
 
     # HTTP vs HTTPS in allow_hosts
     request = MockRequest("http://api.example.com/test")
-    result = ls_utils.filter_request_headers(
-        request, allow_hosts=["https://api.example.com"]
-    )
+    result = ls_utils.filter_request_headers(request, allow_hosts=["https://api.example.com"])
     assert result is None  # Should not match different protocol
 
     # Port numbers in URLs
@@ -645,9 +558,7 @@ def test_filter_request_headers_edge_cases():
 
     # Subdomain with allow_hosts containing full URL
     request = MockRequest("https://sub.example.com/test")
-    result = ls_utils.filter_request_headers(
-        request, allow_hosts=["https://example.com"]
-    )
+    result = ls_utils.filter_request_headers(request, allow_hosts=["https://example.com"])
     assert result is None  # Full URL should not match subdomain
 
 
@@ -676,16 +587,12 @@ def test_filter_request_headers_localhost():
 
     # Test full URL matching for localhost with port
     request = MockRequest("http://localhost:9000/test")
-    result = ls_utils.filter_request_headers(
-        request, allow_hosts=["http://localhost:9000"]
-    )
+    result = ls_utils.filter_request_headers(request, allow_hosts=["http://localhost:9000"])
     assert result is request
 
     # Test port mismatch
     request = MockRequest("http://localhost:8080/test")
-    result = ls_utils.filter_request_headers(
-        request, allow_hosts=["http://localhost:3000"]
-    )
+    result = ls_utils.filter_request_headers(request, allow_hosts=["http://localhost:3000"])
     assert result is None
 
 
@@ -704,8 +611,6 @@ def test_an_empty_project_variable_falls_back_to_default(
     for fn in (
         ls_utils.get_env_var,
         ls_utils.get_tracer_project,
-        ls_utils.get_tracer_agent_id,
-        ls_utils.get_tracer_agent_environment,
     ):
         fn.cache_clear()
 
