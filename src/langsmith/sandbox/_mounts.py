@@ -192,9 +192,7 @@ def _copy_mount_secret(secret: Any, field: str) -> SandboxProxySecret:
 def _require_git_remote_url(remote_url: str) -> str:
     if not isinstance(remote_url, str) or remote_url == "":
         raise ValueError("remote_url must be a non-empty string")
-    if remote_url != remote_url.strip() or any(
-        char.isspace() or char == "\x00" for char in remote_url
-    ):
+    if remote_url != remote_url.strip() or any(char.isspace() or char == "\x00" for char in remote_url):
         raise ValueError("remote_url must not contain whitespace or NUL bytes")
 
     parsed = urlsplit(remote_url)
@@ -350,9 +348,7 @@ def _normalize_mounts(mounts: Sequence[SandboxMount]) -> list[SandboxMount]:
             raise ValueError("mounts must be a non-empty list of mount dictionaries")
         mount_type = mount.get("type")
         if mount_type not in {"s3", "gcs", "git", "contexthub"}:
-            raise ValueError(
-                "mount_config only supports s3, gcs, git, and contexthub mounts"
-            )
+            raise ValueError("mount_config only supports s3, gcs, git, and contexthub mounts")
         _reject_provider_credentials_in_mount(mount)
         normalized.append(mount)
     return normalized
@@ -375,8 +371,7 @@ def _reject_provider_credentials_in_mount(value: Any) -> None:
         for key, child in value.items():
             if key in _FORBIDDEN_MOUNT_CREDENTIAL_FIELDS:
                 raise ValueError(
-                    "provider credentials must be supplied in mount_config.auth, "
-                    "not individual mount specs"
+                    "provider credentials must be supplied in mount_config.auth, not individual mount specs"
                 )
             _reject_provider_credentials_in_mount(child)
     elif isinstance(value, list):
@@ -407,21 +402,15 @@ def _normalize_mount_auth(
                 by_provider["aws"] = {"role_arn": role_arn}
                 continue
             by_provider["aws"] = {
-                "access_key_id": _copy_mount_secret(
-                    aws.get("access_key_id"), "access_key_id"
-                ),
-                "secret_access_key": _copy_mount_secret(
-                    aws.get("secret_access_key"), "secret_access_key"
-                ),
+                "access_key_id": _copy_mount_secret(aws.get("access_key_id"), "access_key_id"),
+                "secret_access_key": _copy_mount_secret(aws.get("secret_access_key"), "secret_access_key"),
             }
         else:
             gcp = block.get("gcp")
             if not isinstance(gcp, dict):
                 raise ValueError("gcp mount auth must include a gcp block")
             by_provider["gcp"] = {
-                "service_account_json": _copy_mount_secret(
-                    gcp.get("service_account_json"), "service_account_json"
-                )
+                "service_account_json": _copy_mount_secret(gcp.get("service_account_json"), "service_account_json")
             }
     return by_provider
 
@@ -451,11 +440,7 @@ def mount_config(
         if isinstance(rule, dict) and rule.get("enabled") is True
     }
 
-    if (
-        "s3" in mount_providers
-        and "aws" not in auth_by_provider
-        and "aws" not in proxy_providers
-    ):
+    if "s3" in mount_providers and "aws" not in auth_by_provider and "aws" not in proxy_providers:
         raise ValueError("s3 mounts require aws auth in mount_config")
     if "gcs" in mount_providers and "gcp" not in auth_by_provider:
         raise ValueError("gcs mounts require gcp auth in mount_config")
@@ -488,7 +473,4 @@ def validate_mount_config_proxy_config(
             continue
         rule_type = rule.get("type")
         if rule_type in {"aws", "gcp"} and rule_type in auth:
-            raise ValueError(
-                f"{rule_type} auth cannot be provided in both "
-                "mount_config and proxy_config"
-            )
+            raise ValueError(f"{rule_type} auth cannot be provided in both mount_config and proxy_config")

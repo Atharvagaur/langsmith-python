@@ -378,7 +378,7 @@ def get_env_var(
     name: str,
     default: str,
     *,
-    namespaces: tuple = ("LANGSMITH", "LANGCHAIN"),
+    namespaces: tuple[str, ...] = ("LANGSMITH", "LANGCHAIN"),
 ) -> str: ...
 
 
@@ -387,7 +387,7 @@ def get_env_var(
     name: str,
     default: None = None,
     *,
-    namespaces: tuple = ("LANGSMITH", "LANGCHAIN"),
+    namespaces: tuple[str, ...] = ("LANGSMITH", "LANGCHAIN"),
 ) -> Optional[str]: ...
 
 
@@ -396,7 +396,7 @@ def get_env_var(
     name: str,
     default: Optional[str] = None,
     *,
-    namespaces: tuple = ("LANGSMITH", "LANGCHAIN"),
+    namespaces: tuple[str, ...] = ("LANGSMITH", "LANGCHAIN"),
 ) -> Optional[str]:
     """Retrieve an environment variable from a list of namespaces.
 

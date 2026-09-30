@@ -34,9 +34,7 @@ def create_large_file(size: int, dir: str) -> str:
 DATASET_NAME = "upsert_big_file_to_dataset"
 
 
-def benchmark_big_file_upload(
-    size_bytes: int, num_examples: int, samples: int = 1
-) -> Dict:
+def benchmark_big_file_upload(size_bytes: int, num_examples: int, samples: int = 1) -> Dict:
     """
     Benchmark run creation with specified parameters.
     Returns timing statistics.
@@ -75,9 +73,7 @@ def benchmark_big_file_upload(
     return {
         "mean": statistics.mean(multipart_timings),
         "median": statistics.median(multipart_timings),
-        "stdev": (
-            statistics.stdev(multipart_timings) if len(multipart_timings) > 1 else 0
-        ),
+        "stdev": (statistics.stdev(multipart_timings) if len(multipart_timings) > 1 else 0),
         "min": min(multipart_timings),
         "max": max(multipart_timings),
     }

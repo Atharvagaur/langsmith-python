@@ -29,10 +29,10 @@ Example:
 
 from __future__ import annotations
 
-import dataclasses
 import re
-from collections.abc import Mapping
+import dataclasses
 from typing import Any, Optional
+from collections.abc import Mapping
 
 from langsmith import utils
 

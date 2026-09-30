@@ -67,9 +67,7 @@ class FakeRequest:
                 return res
             elif endpoint == "http://localhost:1984/examples":
                 res = MagicMock()
-                res.json.return_value = [
-                    e.dict() if not isinstance(e, dict) else e for e in self.ds_examples
-                ]
+                res.json.return_value = [e.dict() if not isinstance(e, dict) else e for e in self.ds_examples]
                 return res
             elif endpoint == "http://localhost:1984/sessions":
                 res = {}  # type: ignore
@@ -78,10 +76,7 @@ class FakeRequest:
                 response = MagicMock()
                 response.json.return_value = res
                 return response
-            elif (
-                endpoint
-                == f"http://localhost:1984/sessions/{self.created_session['id']}"
-            ):  # type: ignore
+            elif endpoint == f"http://localhost:1984/sessions/{self.created_session['id']}":  # type: ignore
                 res = self.created_session  # type: ignore
                 response = MagicMock()
                 response.json.return_value = res
@@ -91,16 +86,11 @@ class FakeRequest:
                 raise ValueError(f"Unknown endpoint: {endpoint}")
         elif verb == "POST":
             if endpoint == "http://localhost:1984/sessions":
-                self.created_session = json.loads(kwargs["data"]) | {
-                    "tenant_id": self.tenant_id
-                }
+                self.created_session = json.loads(kwargs["data"]) | {"tenant_id": self.tenant_id}
                 response = MagicMock()
                 response.json.return_value = self.created_session
                 return response
-            elif (
-                endpoint == "http://localhost:1984/runs/batch"
-                or endpoint == "http://localhost:1984/runs/multipart"
-            ):
+            elif endpoint == "http://localhost:1984/runs/batch" or endpoint == "http://localhost:1984/runs/multipart":
                 loaded_runs = parse_request_data(kwargs["data"])
                 posted = loaded_runs.get("post", [])
                 patched = loaded_runs.get("patch", [])
@@ -114,9 +104,7 @@ class FakeRequest:
                 res = MagicMock()
                 res.json.return_value = {
                     "runs": [
-                        r
-                        for r in self.runs.values()
-                        if r["trace_id"] == r["id"] and r.get("reference_example_id")
+                        r for r in self.runs.values() if r["trace_id"] == r["id"] and r.get("reference_example_id")
                     ]
                 }
                 return res
@@ -137,10 +125,7 @@ class FakeRequest:
             else:
                 raise ValueError(f"Unknown endpoint: {endpoint}")
         elif verb == "PATCH":
-            if (
-                endpoint
-                == f"http://localhost:1984/sessions/{self.created_session['id']}"
-            ):  # type: ignore
+            if endpoint == f"http://localhost:1984/sessions/{self.created_session['id']}":  # type: ignore
                 updates = json.loads(kwargs["data"])
                 self.created_session.update({k: v for k, v in updates.items() if v})  # type: ignore
                 response = MagicMock()
@@ -184,9 +169,7 @@ def _create_example(idx: int) -> Tuple[ls_schemas.Example, Dict[str, Any]]:
     }
 
 
-def _fake_client_for_examples(
-    examples: list[dict[str, Any]], ds_id: str, ds_name: str
-) -> tuple[Client, FakeRequest]:
+def _fake_client_for_examples(examples: list[dict[str, Any]], ds_id: str, ds_name: str) -> tuple[Client, FakeRequest]:
     tenant_id = str(uuid.uuid4())
     session = mock.Mock()
     fake_request = FakeRequest(ds_id, ds_name, examples, tenant_id)
@@ -198,9 +181,7 @@ def _fake_client_for_examples(
 
 def test_evaluate_feedback_includes_experiment_session_id_and_run_start_time() -> None:
     example, example_payload = _create_example(0)
-    client, fake_request = _fake_client_for_examples(
-        [example_payload], str(example.dataset_id), "my-dataset"
-    )
+    client, fake_request = _fake_client_for_examples([example_payload], str(example.dataset_id), "my-dataset")
 
     def predict(inputs: dict) -> dict:
         return {"output": inputs["in"] + 1}
@@ -229,9 +210,7 @@ def test_evaluate_feedback_includes_experiment_session_id_and_run_start_time() -
 @pytest.mark.asyncio
 async def test_aevaluate_feedback_includes_experiment_id_and_start_time() -> None:
     example, example_payload = _create_example(0)
-    client, fake_request = _fake_client_for_examples(
-        [example_payload], str(example.dataset_id), "my-dataset"
-    )
+    client, fake_request = _fake_client_for_examples([example_payload], str(example.dataset_id), "my-dataset")
 
     async def predict(inputs: dict) -> dict:
         return {"output": inputs["in"] + 1}
@@ -258,11 +237,7 @@ async def test_aevaluate_feedback_includes_experiment_id_and_start_time() -> Non
 
 
 def _evaluator_run_ids(fake_request: FakeRequest) -> set:
-    return {
-        run_id
-        for run_id, run in fake_request.runs.items()
-        if run.get("session_name") == "evaluators"
-    }
+    return {run_id for run_id, run in fake_request.runs.items() if run.get("session_name") == "evaluators"}
 
 
 def _feedback_source_run_id(feedback: dict) -> Any:
@@ -272,9 +247,7 @@ def _feedback_source_run_id(feedback: dict) -> Any:
 @pytest.mark.parametrize("disable_evaluator_tracing", [True, False])
 def test_evaluate_disable_evaluator_tracing(disable_evaluator_tracing: bool) -> None:
     example, example_payload = _create_example(0)
-    client, fake_request = _fake_client_for_examples(
-        [example_payload], str(example.dataset_id), "my-dataset"
-    )
+    client, fake_request = _fake_client_for_examples([example_payload], str(example.dataset_id), "my-dataset")
 
     def predict(inputs: dict) -> dict:
         return {"output": inputs["in"] + 1}
@@ -334,9 +307,7 @@ async def test_aevaluate_disable_evaluator_tracing(
     disable_evaluator_tracing: bool,
 ) -> None:
     example, example_payload = _create_example(0)
-    client, fake_request = _fake_client_for_examples(
-        [example_payload], str(example.dataset_id), "my-dataset"
-    )
+    client, fake_request = _fake_client_for_examples([example_payload], str(example.dataset_id), "my-dataset")
 
     async def predict(inputs: dict) -> dict:
         return {"output": inputs["in"] + 1}
@@ -392,9 +363,7 @@ async def test_aevaluate_disable_evaluator_tracing(
 @pytest.mark.parametrize("blocking", [False, True])
 @pytest.mark.parametrize("as_runnable", [False, True])
 @pytest.mark.parametrize("upload_results", [False, True])
-def test_evaluate_results(
-    blocking: bool, as_runnable: bool, upload_results: bool
-) -> None:
+def test_evaluate_results(blocking: bool, as_runnable: bool, upload_results: bool) -> None:
     session = mock.Mock()
     ds_name = "my-dataset"
     ds_id = "00886375-eb2a-4038-9032-efff60309896"
@@ -405,9 +374,7 @@ def test_evaluate_results(
     ds_examples = [e[0] for e in ds_example_responses]
     dev_split = random.sample(ds_examples, SPLIT_SIZE)
     tenant_id = str(uuid.uuid4())
-    fake_request = FakeRequest(
-        ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id
-    )
+    fake_request = FakeRequest(ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id)
     session.request = fake_request.request
     client = Client(
         api_url="http://localhost:1984",
@@ -553,10 +520,7 @@ def test_evaluate_results(
         assert r["run"].outputs["output"] == r["example"].inputs["in"] + 1  # type: ignore
         assert set(r["run"].outputs.keys()) == {"output"}  # type: ignore
         assert len(r["evaluation_results"]["results"]) == len(evaluators) + 1
-        assert all(
-            er.score is not None or er.value is not None
-            for er in r["evaluation_results"]["results"]
-        )
+        assert all(er.score is not None or er.value is not None for er in r["evaluation_results"]["results"])
     assert len(results._summary_results["results"]) == len(summary_evaluators)
 
     N_PREDS = SPLIT_SIZE * NUM_REPETITIONS
@@ -687,9 +651,7 @@ def test_evaluate_raises_for_async():
 @pytest.mark.parametrize("blocking", [False, True])
 @pytest.mark.parametrize("as_runnable", [False, True])
 @pytest.mark.parametrize("upload_results", [False, True])
-async def test_aevaluate_results(
-    blocking: bool, as_runnable: bool, upload_results: bool
-) -> None:
+async def test_aevaluate_results(blocking: bool, as_runnable: bool, upload_results: bool) -> None:
     session = mock.Mock()
     ds_name = "my-dataset"
     ds_id = "00886375-eb2a-4038-9032-efff60309896"
@@ -700,9 +662,7 @@ async def test_aevaluate_results(
     ds_examples = [e[0] for e in ds_example_responses]
     dev_split = random.sample(ds_examples, SPLIT_SIZE)
     tenant_id = str(uuid.uuid4())
-    fake_request = FakeRequest(
-        ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id
-    )
+    fake_request = FakeRequest(ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id)
     session.request = fake_request.request
     client = Client(
         api_url="http://localhost:1984",
@@ -761,9 +721,7 @@ async def test_aevaluate_results(
         ordering_of_stuff.append("evaluate")
         return {"score": outputs["output"]}
 
-    async def score_unpacked_inputs_outputs_reference(
-        inputs, outputs, reference_outputs
-    ):
+    async def score_unpacked_inputs_outputs_reference(inputs, outputs, reference_outputs):
         ordering_of_stuff.append("evaluate")
         return {"score": reference_outputs["answer"]}
 
@@ -853,10 +811,7 @@ async def test_aevaluate_results(
     async for r in results:
         assert r["run"].outputs["output"] == r["example"].inputs["in"] + 1  # type: ignore
         assert set(r["run"].outputs.keys()) == {"output"}  # type: ignore
-        assert all(
-            er.score is not None or er.value is not None
-            for er in r["evaluation_results"]["results"]
-        )
+        assert all(er.score is not None or er.value is not None for er in r["evaluation_results"]["results"])
     assert len(results._summary_results["results"]) == len(summary_evaluators)
 
     N_PREDS = SPLIT_SIZE * NUM_REPETITIONS
@@ -901,9 +856,9 @@ async def test_aevaluate_results(
             client=client,
             blocking=blocking,
         )
-        assert [
-            x["evaluation_results"]["results"][0].score async for x in ex_results2
-        ] == [x["evaluation_results"]["results"][0].score for x in all_results]
+        assert [x["evaluation_results"]["results"][0].score async for x in ex_results2] == [
+            x["evaluation_results"]["results"][0].score for x in all_results
+        ]
 
     # Returning list of non-dicts not supported.
     async def bad_eval_list(run, example):
@@ -1027,9 +982,7 @@ async def async_extra_args(inputs, attachments, foo="bar"):
         # No positional parameters
         (
             lambda *, foo="bar": None,
-            re.escape(
-                "Target function must accept at least one positional argument (inputs)"
-            ),
+            re.escape("Target function must accept at least one positional argument (inputs)"),
         ),
         # Non-callable
         ("not_a_function", []),
@@ -1067,9 +1020,7 @@ def valid_multiple_supported(inputs, outputs, reference_outputs, *, optional=Non
     return {"score": 1}
 
 
-async def valid_multiple_supported_async(
-    inputs, outputs, reference_outputs, *, optional=None
-):
+async def valid_multiple_supported_async(inputs, outputs, reference_outputs, *, optional=None):
     return {"score": 1}
 
 
@@ -1097,9 +1048,7 @@ def valid_additional_kwargs(*, foo, bar, optional=None, **kwargs):
     return {"score": 1}
 
 
-def kwarg_valid_multiple_supported(
-    *, inputs, outputs, reference_outputs, optional=None
-):
+def kwarg_valid_multiple_supported(*, inputs, outputs, reference_outputs, optional=None):
     return {"score": 1}
 
 
@@ -1111,9 +1060,7 @@ async def valid_additional_kwargs_async(*, foo, bar, optional=None, **kwargs):
     return {"score": 1}
 
 
-async def kwarg_valid_multiple_supported_async(
-    *, inputs, outputs, reference_outputs, optional=None
-):
+async def kwarg_valid_multiple_supported_async(*, inputs, outputs, reference_outputs, optional=None):
     return {"score": 1}
 
 
@@ -1137,9 +1084,7 @@ def valid_mixed_positional_and_keyword(foo, *, bar, optional=None):
     return {"score": 1}
 
 
-def valid_mixed_positional_and_keyword_with_reference_outputs(
-    inputs, outputs, *, reference_outputs, optional=None
-):
+def valid_mixed_positional_and_keyword_with_reference_outputs(inputs, outputs, *, reference_outputs, optional=None):
     return {"score": 1}
 
 
@@ -1157,9 +1102,7 @@ def invalid_mixed_positional_and_keyword_three_args(baz, *, foo, bar, optional=N
     return {"score": 1}
 
 
-async def invalid_mixed_positional_and_keyword_three_args_async(
-    baz, *, foo, bar, optional=None
-):
+async def invalid_mixed_positional_and_keyword_three_args_async(baz, *, foo, bar, optional=None):
     return {"score": 1}
 
 
@@ -1214,9 +1157,7 @@ def test_passing_kwargs_is_working():
     ds_example_responses = [_create_example(i) for i in range(10)]
     ds_examples = [e[0] for e in ds_example_responses]
     tenant_id = str(uuid.uuid4())
-    fake_request = FakeRequest(
-        ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id
-    )
+    fake_request = FakeRequest(ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id)
     session.request = fake_request.request
     client = Client(api_url="http://localhost:1984", api_key="123", session=session)
     client._tenant_id = uuid.UUID(tenant_id)
@@ -1261,9 +1202,7 @@ async def test_normalize_evaluator_func_valid(func, is_async):
     ds_example_responses = [_create_example(i) for i in range(10)]
     ds_examples = [e[0] for e in ds_example_responses]
     tenant_id = str(uuid.uuid4())
-    fake_request = FakeRequest(
-        ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id
-    )
+    fake_request = FakeRequest(ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id)
     session.request = fake_request.request
     client = Client(api_url="http://localhost:1984", api_key="123", session=session)
     client._tenant_id = uuid.UUID(tenant_id)
@@ -1287,18 +1226,14 @@ def test_normalize_evaluator_func_invalid(func, is_async):
     ds_example_responses = [_create_example(i) for i in range(10)]
     ds_examples = [e[0] for e in ds_example_responses]
     tenant_id = str(uuid.uuid4())
-    fake_request = FakeRequest(
-        ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id
-    )
+    fake_request = FakeRequest(ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id)
     session.request = fake_request.request
     client = Client(api_url="http://localhost:1984", api_key="123", session=session)
     client._tenant_id = uuid.UUID(tenant_id)
 
     with pytest.raises(ValueError, match="Invalid evaluator function"):
         if is_async:
-            asyncio.run(
-                aevaluate(atarget, data=ds_examples, evaluators=[func], client=client)
-            )
+            asyncio.run(aevaluate(atarget, data=ds_examples, evaluators=[func], client=client))
         else:
             evaluate(target, data=ds_examples, evaluators=[func], client=client)
 
@@ -1354,9 +1289,11 @@ def test_feedback_keys_read_from_user_func_not_wrapper(func, expected):
 
 def test_collect_evaluator_keys_mixes_legacy_and_modern():
     """The aggregate sent to create_project resolves keys for both styles."""
-    assert _collect_evaluator_keys(
-        [_modern_eval, _modern_subset_eval, _legacy_run_example_eval]
-    ) == ["correctness", "relevance", "legacy_key"]
+    assert _collect_evaluator_keys([_modern_eval, _modern_subset_eval, _legacy_run_example_eval]) == [
+        "correctness",
+        "relevance",
+        "legacy_key",
+    ]
 
 
 def test_dynamic_run_evaluator_exposes_feedback_keys_property():
@@ -1494,9 +1431,7 @@ def test__normalize_comparison_evaluator(evaluator: Callable) -> None:
             outputs={"response": "e" * 3},
         ),
     ]
-    example = ls_schemas.Example(
-        id=uuid.uuid4(), inputs={"in": "b"}, outputs={"answer": "f" * 4}
-    )
+    example = ls_schemas.Example(id=uuid.uuid4(), inputs={"in": "b"}, outputs={"answer": "f" * 4})
     (normalized, _) = _normalize_comparison_evaluator_func(evaluator)
     assert normalized(runs, example) == [2, 3]
 
@@ -1536,9 +1471,7 @@ async def test__normalize_comparison_evaluator_async(evaluator: Callable) -> Non
             outputs={"response": "e" * 3},
         ),
     ]
-    example = ls_schemas.Example(
-        id=uuid.uuid4(), inputs={"in": "b"}, outputs={"answer": "f" * 4}
-    )
+    example = ls_schemas.Example(id=uuid.uuid4(), inputs={"in": "b"}, outputs={"answer": "f" * 4})
     (normalized, _) = _normalize_comparison_evaluator_func(evaluator)
     assert await normalized(runs, example) == [2, 3]
 
@@ -1570,9 +1503,7 @@ def test_invalid_evaluate_args() -> None:
     ]:
         with pytest.raises(
             ValueError,
-            match=(
-                "Received invalid arguments. .* when target is an existing experiment."
-            ),
+            match=("Received invalid arguments. .* when target is an existing experiment."),
         ):
             evaluate("foo", **kwargs)
 
@@ -1586,16 +1517,11 @@ def test_invalid_evaluate_args() -> None:
     ]:
         with pytest.raises(
             ValueError,
-            match=(
-                "Received invalid arguments. .* when target is two existing "
-                "experiments."
-            ),
+            match=("Received invalid arguments. .* when target is two existing experiments."),
         ):
             evaluate(("foo", "bar"), **kwargs)
 
-    with pytest.raises(
-        ValueError, match="Received invalid target. If a tuple is specified"
-    ):
+    with pytest.raises(ValueError, match="Received invalid target. If a tuple is specified"):
         evaluate(("foo", "bar", "baz"))
 
     with pytest.raises(ValueError, match="Received unsupported arguments"):
@@ -1612,9 +1538,7 @@ async def test_invalid_aevaluate_args() -> None:
     ]:
         with pytest.raises(
             ValueError,
-            match=(
-                "Received invalid arguments. .* when target is an existing experiment."
-            ),
+            match=("Received invalid arguments. .* when target is an existing experiment."),
         ):
             await aevaluate("foo", **kwargs)
 
@@ -1636,9 +1560,7 @@ def test_evaluate_infers_num_examples_from_list() -> None:
     ds_example_responses = [_create_example(i) for i in range(num_examples)]
     examples = [e[0] for e in ds_example_responses]
     tenant_id = str(uuid.uuid4())
-    fake_request = FakeRequest(
-        ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id
-    )
+    fake_request = FakeRequest(ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id)
     session.request = fake_request.request
     client = Client(
         api_url="http://localhost:1984",
@@ -1681,9 +1603,7 @@ def test_evaluate_omits_num_examples_for_generator() -> None:
     ds_example_responses = [_create_example(i) for i in range(3)]
     examples = [e[0] for e in ds_example_responses]
     tenant_id = str(uuid.uuid4())
-    fake_request = FakeRequest(
-        ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id
-    )
+    fake_request = FakeRequest(ds_id, ds_name, [e[1] for e in ds_example_responses], tenant_id)
     session.request = fake_request.request
     client = Client(
         api_url="http://localhost:1984",
@@ -1922,9 +1842,7 @@ def test_load_traces_uses_v1_unless_smithdb_only(instance_flags, case) -> None:
     client._get_langsmith_api_sync.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "project_ref", ["by-session", "by-uuid", "by-name"], ids=lambda p: str(p)
-)
+@pytest.mark.parametrize("project_ref", ["by-session", "by-uuid", "by-name"], ids=lambda p: str(p))
 def test_load_traces_does_not_warn_about_list_runs(project_ref) -> None:
     """evaluate()/aevaluate() are supported; they must not warn about list_runs().
 
@@ -1948,9 +1866,7 @@ def test_load_traces_does_not_warn_about_list_runs(project_ref) -> None:
         ),
         # Stub only the HTTP fetch, so the real decorated list_runs() still runs.
         mock.patch.object(Client, "_get_cursor_paginated_list", return_value=iter([])),
-        mock.patch.object(
-            Client, "read_project", return_value=mock.Mock(id=session.id)
-        ),
+        mock.patch.object(Client, "read_project", return_value=mock.Mock(id=session.id)),
     ):
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)

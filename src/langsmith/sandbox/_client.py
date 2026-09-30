@@ -258,9 +258,7 @@ class SandboxClient:
         if self._default_headers:
             client_headers = merge_headers(client_headers, self._default_headers)
         transport = RetryTransport(max_retries=max_retries)
-        self._http = httpx.Client(
-            transport=transport, timeout=timeout, headers=client_headers
-        )
+        self._http = httpx.Client(transport=transport, timeout=timeout, headers=client_headers)
         self._registries_client: Optional[Langsmith] = None
 
     def _api_root(self) -> str:
@@ -574,9 +572,7 @@ class SandboxClient:
         if snapshot and snapshot_name and snapshot != snapshot_name:
             raise ValueError("snapshot and snapshot_name must not disagree")
         if snapshot_id and reference:
-            raise ValueError(
-                "At most one of snapshot_id, snapshot or snapshot_name may be set"
-            )
+            raise ValueError("At most one of snapshot_id, snapshot or snapshot_name may be set")
         validate_ttl(idle_ttl_seconds, "idle_ttl_seconds")
         validate_ttl(delete_after_stop_seconds, "delete_after_stop_seconds")
 
@@ -613,9 +609,7 @@ class SandboxClient:
         if run_config is not None:
             payload["run_config"] = _run_config_payload(run_config)
         if access_delegation is not None:
-            payload["access_delegation"] = _validate_access_delegation(
-                access_delegation
-            )
+            payload["access_delegation"] = _validate_access_delegation(access_delegation)
 
         http_timeout = (timeout + 30) if wait_for_ready else 30
 
@@ -655,9 +649,7 @@ class SandboxClient:
             return Sandbox.from_dict(response.json(), client=self, auto_delete=False)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{name}' not found", resource_type="sandbox") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
@@ -673,16 +665,10 @@ class SandboxClient:
             response = self._http.get(url, headers=self._request_headers(headers))
             response.raise_for_status()
             data = response.json()
-            return [
-                Sandbox.from_dict(c, client=self, auto_delete=False)
-                for c in data.get("sandboxes", [])
-            ]
+            return [Sandbox.from_dict(c, client=self, auto_delete=False) for c in data.get("sandboxes", [])]
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise SandboxAPIError(
-                    f"API endpoint not found: {url}. "
-                    f"Check that api_endpoint is correct."
-                ) from e
+                raise SandboxAPIError(f"API endpoint not found: {url}. Check that api_endpoint is correct.") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
@@ -750,16 +736,12 @@ class SandboxClient:
             payload["run_config"] = _run_config_payload(run_config)
 
         try:
-            response = self._http.patch(
-                url, json=payload, headers=self._request_headers(headers)
-            )
+            response = self._http.patch(url, json=payload, headers=self._request_headers(headers))
             response.raise_for_status()
             return Sandbox.from_dict(response.json(), client=self, auto_delete=False)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{name}' not found", resource_type="sandbox") from e
             if e.response.status_code == 409:
                 raise ResourceNameConflictError(
                     f"Sandbox name '{new_name}' already in use",
@@ -787,14 +769,10 @@ class SandboxClient:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{name}' not found", resource_type="sandbox") from e
             handle_client_http_error(e)
 
-    def get_sandbox_status(
-        self, name: str, *, headers: RequestHeaders = None
-    ) -> ResourceStatus:
+    def get_sandbox_status(self, name: str, *, headers: RequestHeaders = None) -> ResourceStatus:
         """Get the provisioning status of a sandbox.
 
         This is a lightweight endpoint designed for high-frequency polling
@@ -819,9 +797,7 @@ class SandboxClient:
             return ResourceStatus.from_dict(response.json())
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{name}' not found", resource_type="sandbox") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
@@ -886,9 +862,7 @@ class SandboxClient:
         """
         validate_service_params(port, expires_in_seconds)
         if access is not None and access not in ("restricted", "workspace"):
-            raise ValueError(
-                f'access must be "restricted" or "workspace", got {access!r}'
-            )
+            raise ValueError(f'access must be "restricted" or "workspace", got {access!r}')
         login_mode = access is not None
         url = _box_url(self._base_url, name, "service-url")
         payload: dict[str, Any] = {"port": port}
@@ -906,18 +880,14 @@ class SandboxClient:
             )
 
         try:
-            response = self._http.post(
-                url, json=payload, headers=self._request_headers(headers)
-            )
+            response = self._http.post(url, json=payload, headers=self._request_headers(headers))
             response.raise_for_status()
             if login_mode:
                 return ServiceLoginURL.from_dict(response.json())
             return ServiceURL.from_dict(response.json(), _refresher=_refresher)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{name}' not found", resource_type="sandbox") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
@@ -977,16 +947,12 @@ class SandboxClient:
             payload["content_disposition"] = content_disposition
 
         try:
-            response = self._http.post(
-                url, json=payload, headers=self._request_headers(headers)
-            )
+            response = self._http.post(url, json=payload, headers=self._request_headers(headers))
             response.raise_for_status()
             return DownloadURL.from_dict(response.json())
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{name}' not found", resource_type="sandbox") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
@@ -1063,15 +1029,11 @@ class SandboxClient:
         url = _box_url(self._base_url, name, "start")
 
         try:
-            response = self._http.post(
-                url, json={}, headers=self._request_headers(headers)
-            )
+            response = self._http.post(url, json={}, headers=self._request_headers(headers))
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{name}' not found", resource_type="sandbox") from e
             handle_client_http_error(e)
 
         return self.wait_for_sandbox(name, timeout=timeout, headers=headers)
@@ -1089,15 +1051,11 @@ class SandboxClient:
         url = _box_url(self._base_url, name, "stop")
 
         try:
-            response = self._http.post(
-                url, json={}, headers=self._request_headers(headers)
-            )
+            response = self._http.post(url, json={}, headers=self._request_headers(headers))
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{name}' not found", resource_type="sandbox") from e
             handle_client_http_error(e)
 
     # ========================================================================
@@ -1160,9 +1118,7 @@ class SandboxClient:
             payload["run_config"] = _run_config_payload(run_config)
 
         try:
-            response = self._http.post(
-                url, json=payload, headers=self._request_headers(headers)
-            )
+            response = self._http.post(url, json=payload, headers=self._request_headers(headers))
             response.raise_for_status()
             snapshot = Snapshot.from_dict(response.json())
         except httpx.HTTPStatusError as e:
@@ -1318,24 +1274,18 @@ class SandboxClient:
             payload["run_config"] = _run_config_payload(run_config)
 
         try:
-            response = self._http.post(
-                url, json=payload, headers=self._request_headers(headers)
-            )
+            response = self._http.post(url, json=payload, headers=self._request_headers(headers))
             response.raise_for_status()
             snapshot = Snapshot.from_dict(response.json())
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Sandbox '{sandbox_name}' not found", resource_type="sandbox"
-                ) from e
+                raise ResourceNotFoundError(f"Sandbox '{sandbox_name}' not found", resource_type="sandbox") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
         return self.wait_for_snapshot(snapshot.id, timeout=timeout, headers=headers)
 
-    def get_snapshot(
-        self, snapshot_id: str, *, headers: RequestHeaders = None
-    ) -> Snapshot:
+    def get_snapshot(self, snapshot_id: str, *, headers: RequestHeaders = None) -> Snapshot:
         """Get a snapshot by ID or by a Docker-style reference.
 
         Args:
@@ -1358,15 +1308,11 @@ class SandboxClient:
             return Snapshot.from_dict(response.json())
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Snapshot '{snapshot_id}' not found", resource_type="snapshot"
-                ) from e
+                raise ResourceNotFoundError(f"Snapshot '{snapshot_id}' not found", resource_type="snapshot") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
-    def list_snapshot_tags(
-        self, name: str, *, headers: RequestHeaders = None
-    ) -> list[SnapshotTag]:
+    def list_snapshot_tags(self, name: str, *, headers: RequestHeaders = None) -> list[SnapshotTag]:
         """List every tag published under a snapshot name.
 
         Args:
@@ -1385,14 +1331,10 @@ class SandboxClient:
         try:
             response = self._http.get(url, headers=self._request_headers(headers))
             response.raise_for_status()
-            return [
-                SnapshotTag.from_dict(tag) for tag in response.json().get("tags") or []
-            ]
+            return [SnapshotTag.from_dict(tag) for tag in response.json().get("tags") or []]
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Snapshot name '{name}' not found", resource_type="snapshot"
-                ) from e
+                raise ResourceNotFoundError(f"Snapshot name '{name}' not found", resource_type="snapshot") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
@@ -1447,16 +1389,11 @@ class SandboxClient:
             return [Snapshot.from_dict(s) for s in data.get("snapshots", [])]
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise SandboxAPIError(
-                    f"API endpoint not found: {url}. "
-                    f"Check that api_endpoint is correct."
-                ) from e
+                raise SandboxAPIError(f"API endpoint not found: {url}. Check that api_endpoint is correct.") from e
             handle_client_http_error(e)
             raise  # pragma: no cover
 
-    def delete_snapshot(
-        self, snapshot_id: str, *, headers: RequestHeaders = None
-    ) -> None:
+    def delete_snapshot(self, snapshot_id: str, *, headers: RequestHeaders = None) -> None:
         """Delete a snapshot.
 
         Args:
@@ -1473,9 +1410,7 @@ class SandboxClient:
             response.raise_for_status()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ResourceNotFoundError(
-                    f"Snapshot '{snapshot_id}' not found", resource_type="snapshot"
-                ) from e
+                raise ResourceNotFoundError(f"Snapshot '{snapshot_id}' not found", resource_type="snapshot") from e
             handle_client_http_error(e)
 
     def wait_for_snapshot(

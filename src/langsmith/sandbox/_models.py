@@ -591,10 +591,7 @@ class ServiceURL:
         )
 
     def __repr__(self) -> str:
-        return (
-            f"ServiceURL(service_url={self._service_url!r}, "
-            f"expires_at={self._expires_at!r})"
-        )
+        return f"ServiceURL(service_url={self._service_url!r}, expires_at={self._expires_at!r})"
 
 
 class AsyncServiceURL:
@@ -692,9 +689,7 @@ class AsyncServiceURL:
 
     # -- HTTP helpers (one request per call) --------------------------------
 
-    async def request(
-        self, method: str, path: str = "/", **kwargs: Any
-    ) -> httpx.Response:
+    async def request(self, method: str, path: str = "/", **kwargs: Any) -> httpx.Response:
         """Make an async HTTP request to the service, injecting the auth header.
 
         Args:
@@ -750,10 +745,7 @@ class AsyncServiceURL:
         )
 
     def __repr__(self) -> str:
-        return (
-            f"AsyncServiceURL(service_url={self._service_url!r}, "
-            f"expires_at={self._expires_at!r})"
-        )
+        return f"AsyncServiceURL(service_url={self._service_url!r}, expires_at={self._expires_at!r})"
 
 
 # =============================================================================
@@ -1024,32 +1016,24 @@ class CommandHandle:
                 for chunk in self._iter_stream():
                     self._reconnect_attempts = 0  # Reset on successful data
                     if chunk.stream == "stdout":
-                        self._last_stdout_offset = chunk.offset + len(
-                            chunk.data.encode("utf-8")
-                        )
+                        self._last_stdout_offset = chunk.offset + len(chunk.data.encode("utf-8"))
                         if self._on_stdout is not None:
                             self._on_stdout(chunk.data)
                     else:
-                        self._last_stderr_offset = chunk.offset + len(
-                            chunk.data.encode("utf-8")
-                        )
+                        self._last_stderr_offset = chunk.offset + len(chunk.data.encode("utf-8"))
                         if self._on_stderr is not None:
                             self._on_stderr(chunk.data)
                     yield chunk
                 return  # Stream ended normally (exit message received)
 
             except SandboxConnectionError as e:
-                if self._control and (
-                    self._control.killed or self._control.resumes_itself
-                ):
+                if self._control and (self._control.killed or self._control.resumes_itself):
                     raise
 
                 self._reconnect_attempts += 1
                 if self._reconnect_attempts > self.MAX_AUTO_RECONNECTS:
                     raise SandboxConnectionError(
-                        f"Failed to reattach to the command "
-                        f"{self._reconnect_attempts} times in succession, "
-                        f"giving up"
+                        f"Failed to reattach to the command {self._reconnect_attempts} times in succession, giving up"
                     ) from e
 
                 is_hot_reload = isinstance(e, SandboxServerReloadError)
@@ -1314,32 +1298,24 @@ class AsyncCommandHandle:
                 async for chunk in self._aiter_stream():
                     self._reconnect_attempts = 0
                     if chunk.stream == "stdout":
-                        self._last_stdout_offset = chunk.offset + len(
-                            chunk.data.encode("utf-8")
-                        )
+                        self._last_stdout_offset = chunk.offset + len(chunk.data.encode("utf-8"))
                         if self._on_stdout is not None:
                             self._on_stdout(chunk.data)
                     else:
-                        self._last_stderr_offset = chunk.offset + len(
-                            chunk.data.encode("utf-8")
-                        )
+                        self._last_stderr_offset = chunk.offset + len(chunk.data.encode("utf-8"))
                         if self._on_stderr is not None:
                             self._on_stderr(chunk.data)
                     yield chunk
                 return  # Stream ended normally
 
             except SandboxConnectionError as e:
-                if self._control and (
-                    self._control.killed or self._control.resumes_itself
-                ):
+                if self._control and (self._control.killed or self._control.resumes_itself):
                     raise
 
                 self._reconnect_attempts += 1
                 if self._reconnect_attempts > self.MAX_AUTO_RECONNECTS:
                     raise SandboxConnectionError(
-                        f"Failed to reattach to the command "
-                        f"{self._reconnect_attempts} times in succession, "
-                        f"giving up"
+                        f"Failed to reattach to the command {self._reconnect_attempts} times in succession, giving up"
                     ) from e
 
                 is_hot_reload = isinstance(e, SandboxServerReloadError)

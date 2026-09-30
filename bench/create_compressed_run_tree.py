@@ -19,8 +19,6 @@ def create_compressed_run_trees(count: int) -> None:
     for i in range(count):
         RunTree(name=str(i), ls_client=client).post()
 
-    stream, info, destinations = bt._tracing_thread_drain_compressed_buffer(
-        client, size_limit=1, size_limit_bytes=1
-    )
+    stream, info, destinations = bt._tracing_thread_drain_compressed_buffer(client, size_limit=1, size_limit_bytes=1)
     if stream is not None:
         client._send_compressed_multipart_req(stream, info, destinations=destinations)

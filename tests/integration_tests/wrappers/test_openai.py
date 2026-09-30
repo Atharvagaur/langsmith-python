@@ -351,9 +351,7 @@ def test_wrap_openai_chat_tokens(test_case):
             assert collect.run.outputs.get("usage_metadata") is None
             assert collect.run.outputs.get("usage") is None
 
-        run_id_to_usage_metadata[collect.run.id] = collect.run.outputs.get(
-            "usage_metadata"
-        )
+        run_id_to_usage_metadata[collect.run.id] = collect.run.outputs.get("usage_metadata")
 
     filename = f"langsmith_py_wrap_openai_{test_case['description'].replace(' ', '_')}"
     _collect_requests(mock_session, filename)
@@ -415,9 +413,7 @@ async def test_wrap_openai_chat_async_tokens(test_case):
             assert collect.run.outputs.get("usage_metadata") is None
             assert collect.run.outputs.get("usage") is None
 
-        run_id_to_usage_metadata[collect.run.id] = collect.run.outputs.get(
-            "usage_metadata"
-        )
+        run_id_to_usage_metadata[collect.run.id] = collect.run.outputs.get("usage_metadata")
 
     filename = f"langsmith_py_wrap_openai_{test_case['description'].replace(' ', '_')}"
     _collect_requests(mock_session, filename)
@@ -477,9 +473,7 @@ async def test_parse_async_api():
     )
 
     original_client = openai.AsyncClient()
-    patched_client = wrap_openai(
-        openai.AsyncClient(), tracing_extra={"client": ls_client}
-    )
+    patched_client = wrap_openai(openai.AsyncClient(), tracing_extra={"client": ls_client})
 
     messages = [{"role": "user", "content": "Say 'foo' then stop."}]
 
@@ -520,9 +514,7 @@ def test_parse_tokens():
         session=mock_session,
         info=LS_TEST_CLIENT_INFO,
     )
-    wrapped_oai_client = wrap_openai(
-        openai.Client(), tracing_extra={"client": ls_client}
-    )
+    wrapped_oai_client = wrap_openai(openai.Client(), tracing_extra={"client": ls_client})
 
     collect = Collect()
     messages = [{"role": "user", "content": "Check usage"}]
@@ -576,9 +568,7 @@ def test_responses_sync_api():
         max_output_tokens=16,
     )
     assert type(original_create) is type(patched_create)
-    assert original_create.output_text.lower().strip(
-        " ."
-    ) == patched_create.output_text.lower().strip(" .")
+    assert original_create.output_text.lower().strip(" .") == patched_create.output_text.lower().strip(" .")
 
     # Test create(stream=True)
     original_create_stream = original_client.responses.create(
@@ -596,9 +586,7 @@ def test_responses_sync_api():
         stream=True,
     )
     originals, patched = [], []
-    for original_event, patched_event in zip(
-        original_create_stream, patched_create_stream
-    ):
+    for original_event, patched_event in zip(original_create_stream, patched_create_stream):
         originals.append(original_event)
         patched.append(patched_event)
     assert len(originals) == len(patched)
@@ -624,10 +612,7 @@ def test_responses_sync_api():
 
     assert isinstance(original_parse.output[0].content[0].parsed, Format)
     assert isinstance(patched_parse.output[0].content[0].parsed, Format)
-    assert (
-        original_parse.output[0].content[0].parsed
-        == patched_parse.output[0].content[0].parsed
-    )
+    assert original_parse.output[0].content[0].parsed == patched_parse.output[0].content[0].parsed
 
     time.sleep(0.1)
     for call in mock_session.request.call_args_list:
@@ -648,9 +633,7 @@ async def test_responses_async_api():
     )
 
     original_client = openai.AsyncClient()
-    patched_client = wrap_openai(
-        openai.AsyncClient(), tracing_extra={"client": ls_client}
-    )
+    patched_client = wrap_openai(openai.AsyncClient(), tracing_extra={"client": ls_client})
 
     # Test create
     original_create = await original_client.responses.create(
@@ -666,9 +649,7 @@ async def test_responses_async_api():
         max_output_tokens=16,
     )
     assert type(original_create) is type(patched_create)
-    assert original_create.output_text.lower().strip(
-        " ."
-    ) == patched_create.output_text.lower().strip(" .")
+    assert original_create.output_text.lower().strip(" .") == patched_create.output_text.lower().strip(" .")
 
     # Test stream
     original_stream = await original_client.responses.create(
@@ -717,10 +698,7 @@ async def test_responses_async_api():
 
     assert isinstance(original_parse.output[0].content[0].parsed, Format)
     assert isinstance(patched_parse.output[0].content[0].parsed, Format)
-    assert (
-        original_parse.output[0].content[0].parsed
-        == patched_parse.output[0].content[0].parsed
-    )
+    assert original_parse.output[0].content[0].parsed == patched_parse.output[0].content[0].parsed
 
     time.sleep(0.1)
     for call in mock_session.request.call_args_list:
@@ -782,9 +760,7 @@ async def test_responses_stream_async_api():
         info=LS_TEST_CLIENT_INFO,
     )
     original_client = openai.AsyncClient()
-    patched_client = wrap_openai(
-        openai.AsyncClient(), tracing_extra={"client": ls_client}
-    )
+    patched_client = wrap_openai(openai.AsyncClient(), tracing_extra={"client": ls_client})
     original_chunks = []
     patched_chunks = []
     async with original_client.responses.stream(
@@ -884,12 +860,7 @@ async def test_tool_call_chunking():
         assert collect.run
         assert collect.run.outputs["choices"][0]["finish_reason"] == "tool_calls"
         assert collect.run.outputs["choices"][0]["message"]["tool_calls"]
-        assert (
-            collect.run.outputs["choices"][0]["message"]["tool_calls"][0]["function"][
-                "name"
-            ]
-            == "get_weather"
-        )
+        assert collect.run.outputs["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "get_weather"
 
     # Allow time for background threads to complete
     time.sleep(0.1)

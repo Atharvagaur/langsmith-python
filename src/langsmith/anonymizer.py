@@ -97,15 +97,9 @@ class RuleNodeProcessor(StringNodeProcessor):
         self.rules = [
             {
                 "pattern": (
-                    rule["pattern"]
-                    if isinstance(rule["pattern"], re.Pattern)
-                    else re.compile(rule["pattern"])
+                    rule["pattern"] if isinstance(rule["pattern"], re.Pattern) else re.compile(rule["pattern"])
                 ),
-                "replace": (
-                    rule["replace"]
-                    if isinstance(rule.get("replace"), str)
-                    else "[redacted]"
-                ),
+                "replace": (rule["replace"] if isinstance(rule.get("replace"), str) else "[redacted]"),
             }
             for rule in rules
         ]
@@ -327,9 +321,7 @@ DEFAULT_SECRET_RULES: list[StringNodeRule] = [
     # Credentials embedded in URLs: proto://user:PASS@host -> redact PASS only.
     # Username is optional so proto://:PASS@host (empty user) is still covered.
     {
-        "pattern": re.compile(
-            r"\b([a-z][a-z0-9+.-]*://[^:@/\s]*:)[^@/\s]+(@)", re.IGNORECASE
-        ),
+        "pattern": re.compile(r"\b([a-z][a-z0-9+.-]*://[^:@/\s]*:)[^@/\s]+(@)", re.IGNORECASE),
         "replace": rf"\g<1>{SECRET_PLACEHOLDER}\g<2>",
     },
 ]
