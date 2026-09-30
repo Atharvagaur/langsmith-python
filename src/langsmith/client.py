@@ -68,6 +68,7 @@ import langsmith
 from langsmith import env as ls_env
 from langsmith import schemas as ls_schemas
 from langsmith import utils as ls_utils
+from langsmith._address import Address
 from langsmith._internal import (
     _agent_addressing,
     _orjson,
@@ -2318,6 +2319,9 @@ class Client:
         """
         if hasattr(run, "model_dump") and callable(getattr(run, "model_dump")):
             run_create: dict = run.model_dump()  # type: ignore
+            # `RunTree.address` is excluded from the dump; put it back.
+            if getattr(run, "address", None) is not None:
+                run_create["address"] = run.address  # type: ignore[union-attr]
         else:
             run_create = cast(dict, run)
         if "id" not in run_create:
@@ -2440,17 +2444,13 @@ class Client:
                 embedding, prompt, or parser.
             project_name (Optional[str]): The project name of the run.
             revision_id (Optional[Union[UUID, str]]): The revision ID of the run.
-            agent_id (Optional[str]): (experimental) Address the run to an
-                agent instead of a project. Cannot be combined with
-                `project_name` / `session_id` in the same call. Defaults to
-                `LANGSMITH_AGENT_ID`. Agent addressing is in beta and enabled
-                per workspace; a workspace without it rejects the run, so the
-                trace is lost rather than falling back to a project.
-            agent_environment (Optional[str]): (experimental) Narrows
-                `agent_id`; required alongside it. One of `local`,
-                `development`, `staging` or `production` -- anything else is
-                rejected rather than defaulted. Defaults to
-                `LANGSMITH_AGENT_ENVIRONMENT`.
+            address (Optional[Address]): (beta) An `Address` from
+                `langsmith.address`, to send the run to instead of a project.
+                Cannot be combined with `project_name` / `session_id` in the
+                same call. Defaults to the `LANGSMITH_AGENT_*` env vars.
+                This is in beta and enabled per workspace; a
+                workspace without it rejects the run, so the trace is lost
+                rather than falling back to a project.
             api_key (Optional[str]): The API key to use for this specific run.
             api_url (Optional[str]): The API URL to use for this specific run.
             service_key (Optional[str]): The service JWT key for service-to-service auth.
@@ -2494,31 +2494,30 @@ class Client:
         tenant_id: str | None = kwargs.pop("tenant_id", None)
         authorization: str | None = kwargs.pop("authorization", None)
         cookie: str | None = kwargs.pop("cookie", None)
+        _agent_addressing.check_address(kwargs.get("address"))
         # Only `project_name`, this method's own parameter, counts as a caller
         # naming a project. `session_name` and `session_id` arrive in `kwargs`
         # as part of an already-resolved run body -- `RunTree.post` sends the
         # tree's fields that way -- where a project beside an agent means the
         # two were meant to travel together for the endpoint to refuse.
-        _agent_addressing.reject_conflicting(
-            project=project_name,
-            agent_id=kwargs.get("agent_id"),
-            agent_environment=kwargs.get("agent_environment"),
-        )
+        _agent_addressing.reject_conflicting(project=project_name, address=kwargs.get("address"))
         if project_name:
             pass
-        elif "session_name" in kwargs:
-            # Passed through, even as None: a caller that says "no project"
-            # gets no project.
+        elif kwargs.get("session_name") is not None:
             project_name = kwargs.pop("session_name")
         elif kwargs.get("session_id") is not None:
             # Already addressed by project id; leave it alone.
             project_name = None
         else:
-            (
-                project_name,
-                kwargs["agent_id"],
-                kwargs["agent_environment"],
-            ) = _agent_addressing.resolve(None, kwargs.get("agent_id"), kwargs.get("agent_environment"))
+            # No project, `session_name=None` included: resolve here, where a
+            # bad env is caught, rather than in `_run_transform`.
+            kwargs.pop("session_name", None)
+            try:
+                project_name, kwargs["address"] = _agent_addressing.resolve((None, kwargs.get("address")))
+            except _agent_addressing.EnvAddressError as e:
+                # Dropped, not raised: tracing must not break the caller.
+                _agent_addressing.log_untraced(e)
+                return
         run_create = {
             **kwargs,
             "session_name": project_name,
@@ -3633,15 +3632,13 @@ class Client:
             tenant_id (Optional[str]): The tenant ID for multi-tenant requests.
             authorization (Optional[str]): The Authorization header value.
             cookie (Optional[str]): The Cookie header value.
-            **kwargs (Any): Ignored, except `agent_id` / `agent_environment`.
+            **kwargs (Any): Ignored, except `address`.
 
                 !!! warning "Experimental"
-                    `agent_id` / `agent_environment` are in beta. They address
-                    the patch to an agent, and must match the post they belong
-                    to: an update that names neither is resolved by run id, as
-                    every update was before. Agent addressing is enabled per
-                    workspace; a workspace without it rejects the runs. Both
-                    may change without notice.
+                    `address` is in beta. It sends the patch to an address,
+                    and must match the post it belongs to: an update that
+                    names none is resolved by run id, as every update was
+                    before. It may change without notice.
 
         Returns:
             None
@@ -3678,6 +3675,7 @@ class Client:
             ```
         """
         replica_auths: Optional[Sequence[ReplicaAuth]] = kwargs.pop("_replica_auths", None)
+        _agent_addressing.check_address(kwargs.get("address"))
         data: dict[str, Any] = {
             "id": _as_uuid(run_id, "run_id"),
             "name": name,
@@ -3689,8 +3687,7 @@ class Client:
             "extra": extra,
             "session_id": kwargs.pop("session_id", None),
             "session_name": kwargs.pop("session_name", None),
-            "agent_id": kwargs.pop("agent_id", None),
-            "agent_environment": kwargs.pop("agent_environment", None),
+            "address": kwargs.pop("address", None),
         }
         # Updates don't go through `_run_transform`, so address them here.
         _agent_addressing.apply_to_payload(data, update=True)
@@ -4637,11 +4634,7 @@ class Client:
 
         Kept for backends that predate the ``/runs/{run_id}/url`` v2 endpoint.
         """
-        _agent_addressing.reject_url(
-            getattr(run, "session_id", None),
-            getattr(run, "agent_id", None),
-            getattr(run, "agent_environment", None),
-        )
+        _agent_addressing.reject_url(getattr(run, "session_id", None), getattr(run, "address", None))
         if session_id := getattr(run, "session_id", None):
             pass
         elif session_name := getattr(run, "session_name", None):
@@ -7809,8 +7802,7 @@ class Client:
         session_id: Optional[ID_TYPE] = None,
         start_time: Optional[datetime.datetime] = None,
         extend_trace_retention: bool = True,
-        agent_id: Optional[str] = None,
-        agent_environment: Optional[str] = None,
+        address: Optional[Address] = None,
         **kwargs: Any,
     ) -> ls_schemas.Feedback:
         """Create feedback for a run.
@@ -7821,11 +7813,11 @@ class Client:
             specify `trace_id`. *We highly encourage this for latency-sensitive environments.*
 
         !!! warning "Experimental"
-            `agent_id` / `agent_environment` are in beta. Agent addressing is
-            enabled per workspace; a workspace without it rejects the feedback,
-            so it is lost rather than falling back to a project. The agent must
-            already exist -- unlike run ingestion, a feedback part never creates
-            one. Both may change without notice.
+            `address` is in beta. It is enabled per workspace; a
+            workspace without it rejects the feedback, so it is lost rather
+            than falling back to a project. The address must already exist --
+            unlike run ingestion, a feedback part never creates one. It may
+            change without notice.
 
         Args:
             key (str):
@@ -7883,17 +7875,13 @@ class Client:
             extend_trace_retention (bool, default=True):
                 If false, create the feedback without extending the trace's retention
                 tier.
-            agent_id (Optional[str]):
-                The agent to attach this feedback to, instead of a project. Pass
-                whatever the run being described was traced to -- for a run
-                created in this process, `run_tree.agent_id`. Cannot be combined
-                with `session_id` / `project_id`, and is never read from
-                `LANGSMITH_AGENT_ID`: feedback follows its run, not the ambient
-                environment. The agent must already exist; unlike run ingestion,
-                a feedback part never creates one.
-            agent_environment (Optional[str]):
-                Narrows `agent_id`, and requires it. Defaults server-side to
-                `production` when omitted.
+            address (Optional[Address]):
+                The address to attach this feedback to, instead of a project.
+                Pass whatever the run being described was traced to -- for a
+                run created in this process, `run_tree.address`. Cannot be
+                combined with `session_id` / `project_id`, and is never read
+                from the env vars: feedback follows its run, not the ambient
+                environment.
             **kwargs (Any):
                 Additional keyword arguments.
 
@@ -7944,14 +7932,16 @@ class Client:
             )
             ```
         """
+        address = _agent_addressing.check_address(address)
+        _agent_addressing.reject_conflicting(project=project_id, session_id=session_id, address=address)
         run_id = run_id or trace_id
         if run_id is None and project_id is None:
             raise ValueError("One of run_id, trace_id, or project_id  must be provided")
         if run_id is not None and project_id is not None:
             raise ValueError("project_id cannot be provided if run_id or trace_id is provided")
-        if run_id is not None and session_id is None and agent_id is None:
-            # An agent pair locates the project directly, so it satisfies the
-            # same requirement this gate exists for.
+        if run_id is not None and session_id is None and address is None:
+            # An address locates the project directly, so it satisfies the same
+            # requirement this gate exists for.
             _check_feedback_session_id(self.info)
         if kwargs:
             warnings.warn(
@@ -8002,8 +7992,7 @@ class Client:
                 modified_at=datetime.datetime.now(datetime.timezone.utc),
                 feedback_config=feedback_config,
                 session_id=_session_id,
-                agent_id=agent_id,
-                agent_environment=agent_environment,
+                address=address,
                 start_time=start_time,
                 comparative_experiment_id=_ensure_uuid(comparative_experiment_id, accept_null=True),
                 feedback_group_id=_ensure_uuid(feedback_group_id, accept_null=True),
