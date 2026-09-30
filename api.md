@@ -41,6 +41,12 @@ from langsmith.types import (
 )
 ```
 
+## Examples
+
+Methods:
+
+- <code title="delete /api/v1/platform/datasets/{dataset_id}/examples/{example_id}">client.datasets.examples.<a href="./src/langsmith/resources/datasets/examples.py">delete</a>(example_id, \*, dataset_id) -> None</code>
+
 ## ExperimentRuns
 
 Types:
