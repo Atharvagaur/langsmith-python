@@ -143,6 +143,7 @@ class TestBoxes:
                                 "value": "value",
                             }
                         ],
+                        "match_headers": ["string"],
                         "match_hosts": ["string"],
                         "match_paths": ["string"],
                         "type": "type",
@@ -294,6 +295,7 @@ class TestBoxes:
                                 "value": "value",
                             }
                         ],
+                        "match_headers": ["string"],
                         "match_hosts": ["string"],
                         "match_paths": ["string"],
                         "type": "type",
@@ -976,6 +978,7 @@ class TestAsyncBoxes:
                                 "value": "value",
                             }
                         ],
+                        "match_headers": ["string"],
                         "match_hosts": ["string"],
                         "match_paths": ["string"],
                         "type": "type",
@@ -1127,6 +1130,7 @@ class TestAsyncBoxes:
                                 "value": "value",
                             }
                         ],
+                        "match_headers": ["string"],
                         "match_hosts": ["string"],
                         "match_paths": ["string"],
                         "type": "type",
