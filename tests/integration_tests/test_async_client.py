@@ -1,0 +1,476 @@
+import asyncio
+import datetime
+import uuid
+
+import pytest
+
+from langsmith import utils as ls_utils
+from langsmith import uuid7
+from langsmith.async_client import AsyncClient
+from langsmith.schemas import DataType
+from langsmith.utils import LangSmithRateLimitError
+from tests.integration_tests.conftest import skip_if_rate_limited
+
+
+async def wait_for(condition, timeout=10, **kwargs):
+    start_time = asyncio.get_event_loop().time()
+    while True:
+        try:
+            if await condition(**kwargs):
+                return
+        except Exception:
+            if asyncio.get_event_loop().time() - start_time > timeout:
+                raise TimeoutError("Condition not met within the timeout period")
+            await asyncio.sleep(0.1)
+
+
+@pytest.fixture
+async def async_client():
+    ls_utils.get_env_var.cache_clear()
+    client = AsyncClient()
+    yield client
+    await client.aclose()
+
+
+@pytest.mark.require_clickhouse
+@pytest.mark.asyncio
+@skip_if_rate_limited
+async def test_create_run(async_client: AsyncClient):
+    project_name = "__test_create_run" + uuid.uuid4().hex[:8]
+    project_id = (await async_client.create_project(project_name=project_name)).id
+    run_id = uuid7()
+    start_time = datetime.datetime.now(datetime.timezone.utc)
+
+    await async_client.create_run(
+        name="test_run",
+        inputs={"input": "hello"},
+        run_type="llm",
+        project_name=project_name,
+        id=run_id,
+        start_time=start_time,
+    )
+
+    async def check_run():
+        try:
+            run = await async_client.read_run(run_id, project_id=project_id)
+            return run.name == "test_run"
+        except ls_utils.LangSmithError:
+            return False
+
+    await wait_for(check_run)
+
+    run = await async_client.read_run(run_id, project_id=project_id)
+    assert run.name == "test_run"
+    assert run.inputs == {"input": "hello"}
+
+
+@pytest.mark.require_clickhouse
+@pytest.mark.asyncio
+@skip_if_rate_limited
+async def test_list_runs(async_client: AsyncClient):
+    project_name = "__test_list_runs" + uuid.uuid4().hex
+    run_ids = [uuid7() for _ in range(2)]
+    meta_uid = str(uuid7())
+
+    for i, run_id in enumerate(run_ids):
+        await async_client.create_run(
+            name=f"test_run_{i}",
+            inputs={"input": f"hello_{i}"},
+            run_type="llm",
+            project_name=project_name,
+            id=run_id,
+            start_time=datetime.datetime.now(datetime.timezone.utc),
+            end_time=datetime.datetime.now(datetime.timezone.utc),
+            extra={"metadata": {"uid": meta_uid}},
+        )
+
+    filter_ = f'and(eq(metadata_key, "uid"), eq(metadata_value, "{meta_uid}"))'
+
+    async def check_runs():
+        runs = [run async for run in async_client.list_runs(project_name=project_name, filter=filter_)]
+        return len(runs) == 2
+
+    try:
+        await wait_for(check_runs, timeout=30)
+    except TimeoutError:
+        raise LangSmithRateLimitError("rate limited")
+
+
+@pytest.mark.asyncio
+async def test_create_dataset(async_client: AsyncClient):
+    dataset_name = "__test_create_dataset" + uuid.uuid4().hex[:8]
+
+    dataset = await async_client.create_dataset(dataset_name, data_type=DataType.kv)
+
+    assert dataset.name == dataset_name
+    assert dataset.data_type == DataType.kv
+
+    await async_client.delete_dataset(dataset_id=dataset.id)
+
+
+@pytest.mark.asyncio
+async def test_create_example(async_client: AsyncClient):
+    dataset_name = "__test_create_example" + uuid.uuid4().hex
+    dataset = await async_client.create_dataset(dataset_name)
+
+    example = await async_client.create_example(
+        inputs={"input": "hello"}, outputs={"output": "world"}, dataset_id=dataset.id
+    )
+
+    assert example.inputs == {"input": "hello"}
+    assert example.outputs == {"output": "world"}
+
+    await async_client.delete_dataset(dataset_id=dataset.id)
+
+
+@pytest.mark.asyncio
+async def test_list_examples(async_client: AsyncClient):
+    dataset_name = "__test_list_examples" + uuid.uuid4().hex[:8]
+    dataset = await async_client.create_dataset(dataset_name)
+
+    for i in range(3):
+        await async_client.create_example(
+            inputs={"input": f"hello_{i}"},
+            outputs={"output": f"world_{i}"},
+            dataset_id=dataset.id,
+        )
+
+    examples = [example async for example in async_client.list_examples(dataset_id=dataset.id)]
+    assert len(examples) == 3
+
+    await async_client.delete_dataset(dataset_id=dataset.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_create_feedback(async_client: AsyncClient):
+    project_name = "__test_create_feedback" + uuid.uuid4().hex[:8]
+    run_id = uuid7()
+
+    await async_client.create_run(
+        name="test_run",
+        inputs={"input": "hello"},
+        run_type="llm",
+        project_name=project_name,
+        id=run_id,
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    # Wait for the project to be fully available before creating feedback
+    async def check_project_exists():
+        try:
+            await async_client.read_project(project_name=project_name)
+            return True
+        except ls_utils.LangSmithError:
+            return False
+
+    await wait_for(check_project_exists, timeout=20)
+
+    feedback = await async_client.create_feedback(
+        run_id=run_id,
+        key="test_key",
+        score=0.9,
+        value="test_value",
+        comment="test_comment",
+    )
+
+    assert feedback.run_id == run_id
+    assert feedback.key == "test_key"
+    assert feedback.score == 0.9
+    assert feedback.value == "test_value"
+    assert feedback.comment == "test_comment"
+
+    token = await async_client.create_presigned_feedback_token(run_id=run_id, feedback_key="test_presigned_key")
+    await async_client.create_feedback_from_token(
+        token.id, score=0.8, value="presigned_value", comment="presigned_comment"
+    )
+    await async_client.create_feedback_from_token(
+        str(token.url),
+        score=0.9,
+        value="presigned_value",
+        comment="presigned_comment",
+    )
+
+    async def check_feedback():
+        feedbacks = [feedback async for feedback in async_client.list_feedback(run_ids=[run_id])]
+        return sum(feedback.key == "test_presigned_key" for feedback in feedbacks) == 2
+
+    await wait_for(check_feedback, timeout=10)
+    feedbacks = [feedback async for feedback in async_client.list_feedback(run_ids=[run_id])]
+    presigned_feedbacks = [f for f in feedbacks if f.key == "test_presigned_key"]
+    assert len(presigned_feedbacks) == 2
+    assert all(f.value == "presigned_value" for f in presigned_feedbacks)
+    assert len(presigned_feedbacks) == 2
+    for feedback in presigned_feedbacks:
+        assert feedback.value == "presigned_value"
+        assert feedback.comment == "presigned_comment"
+        assert feedback.score in {0.8, 0.9}
+    assert set(f.score for f in presigned_feedbacks) == {0.8, 0.9}
+
+    shared_run_url = None
+
+    # The share endpoint can lag run creation; retry a bit before failing.
+    async def check_share():
+        nonlocal shared_run_url
+        try:
+            shared_run_url = await async_client.share_run(run_id)
+            return True
+        except ls_utils.LangSmithNotFoundError:
+            return False
+
+    await wait_for(check_share, timeout=20)
+    assert shared_run_url is not None
+
+    run_is_shared = False
+
+    async def check_run_is_shared():
+        nonlocal run_is_shared
+        try:
+            run_is_shared = await async_client.run_is_shared(run_id)
+            return run_is_shared
+        except ls_utils.LangSmithNotFoundError:
+            return False
+
+    await wait_for(check_run_is_shared, timeout=20)
+    assert run_is_shared, f"Run isn't shared; failed link: {shared_run_url}"
+
+
+@pytest.mark.asyncio
+async def test_list_feedback(async_client: AsyncClient):
+    project_name = "__test_list_feedback" + uuid.uuid4().hex[:8]
+    run_id = uuid7()
+
+    await async_client.create_run(
+        name="test_run",
+        inputs={"input": "hello"},
+        run_type="llm",
+        project_name=project_name,
+        id=run_id,
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    session: dict = {}
+
+    async def check_project_exists():
+        session["project"] = await async_client.read_project(project_name=project_name)
+        return True
+
+    await wait_for(check_project_exists, timeout=20)
+    session_id = session["project"].id
+
+    for i in range(3):
+        await async_client.create_feedback(
+            run_id=run_id,
+            key=f"test_key_{i}",
+            score=0.9,
+            value=f"test_value_{i}",
+            comment=f"test_comment_{i}",
+            session_id=session_id,
+        )
+
+    async def check_feedbacks():
+        feedbacks = [feedback async for feedback in async_client.list_feedback(run_ids=[run_id])]
+        return len(feedbacks) == 3
+
+    await wait_for(check_feedbacks, timeout=10)
+
+    feedbacks = [feedback async for feedback in async_client.list_feedback(run_ids=[run_id])]
+    assert len(feedbacks) == 3
+
+
+# TODO: remove skip
+@pytest.mark.skip(reason="Flakey")
+@pytest.mark.asyncio
+async def test_delete_feedback(async_client: AsyncClient):
+    """Test deleting feedback."""
+    project_name = "__test_delete_feedback" + uuid.uuid4().hex[:8]
+    run_id = uuid7()
+
+    await async_client.create_run(
+        name="test_run",
+        inputs={"input": "hello"},
+        run_type="llm",
+        project_name=project_name,
+        id=run_id,
+        start_time=datetime.datetime.now(datetime.timezone.utc),
+    )
+
+    # Create feedback
+    feedback = await async_client.create_feedback(
+        run_id=run_id,
+        key="test_feedback",
+        value=1,
+        comment="test comment",
+    )
+
+    # Delete the feedback
+    await async_client.delete_feedback(feedback.id)
+
+    # Verify feedback is deleted by checking list_feedback
+    feedbacks = [feedback async for feedback in async_client.list_feedback(run_ids=[run_id])]
+    assert len(feedbacks) == 0
+
+
+@pytest.mark.asyncio
+async def test_annotation_queue_crud(async_client: AsyncClient):
+    """Test basic CRUD operations for annotation queues."""
+    queue_name = f"test_queue_{uuid.uuid4().hex[:8]}"
+    queue_id = uuid7()
+
+    # Test creation
+    queue = await async_client.create_annotation_queue(name=queue_name, description="Test queue", queue_id=queue_id)
+    assert queue.name == queue_name
+    assert queue.id == queue_id
+
+    # Test reading
+    read_queue = await async_client.read_annotation_queue(queue_id)
+    assert read_queue.id == queue_id
+    assert read_queue.name == queue_name
+
+    # Test updating
+    new_name = f"updated_{queue_name}"
+    await async_client.update_annotation_queue(queue_id=queue_id, name=new_name, description="Updated description")
+
+    updated_queue = await async_client.read_annotation_queue(queue_id)
+    assert updated_queue.name == new_name
+
+    # Test deletion
+    await async_client.delete_annotation_queue(queue_id)
+
+    # Verify deletion
+    queues = [queue async for queue in async_client.list_annotation_queues(queue_ids=[queue_id])]
+    assert len(queues) == 0
+
+
+@pytest.mark.asyncio
+async def test_feedback_config_crud(async_client: AsyncClient):
+    """Test basic CRUD operations for feedback configurations."""
+    feedback_key = f"test_config_{uuid.uuid4().hex[:8]}"
+
+    # Test creation
+    config = await async_client.create_feedback_config(
+        feedback_key=feedback_key,
+        feedback_config={
+            "type": "continuous",
+            "min": 0.0,
+            "max": 1.0,
+        },
+        is_lower_score_better=False,
+    )
+    assert config.feedback_key == feedback_key
+    assert config.feedback_config["type"] == "continuous"
+    assert config.is_lower_score_better is False
+
+    # Test listing with filter
+    configs = [c async for c in async_client.list_feedback_configs(feedback_key=[feedback_key])]
+    assert len(configs) == 1
+    assert configs[0].feedback_key == feedback_key
+
+    # Test update
+    updated = await async_client.update_feedback_config(
+        feedback_key,
+        is_lower_score_better=True,
+    )
+    assert updated.is_lower_score_better is True
+
+    # Test deletion
+    await async_client.delete_feedback_config(feedback_key)
+
+    # Verify deletion
+    configs = [c async for c in async_client.list_feedback_configs(feedback_key=[feedback_key])]
+    assert len(configs) == 0
+
+
+@pytest.mark.asyncio
+async def test_list_annotation_queues(async_client: AsyncClient):
+    """Test listing and filtering annotation queues."""
+    queue_names = [f"test_queue_{i}_{uuid.uuid4().hex[:8]}" for i in range(3)]
+    queue_ids = []
+
+    try:
+        # Create test queues
+        for name in queue_names:
+            queue = await async_client.create_annotation_queue(name=name, description="Test queue")
+            queue_ids.append(queue.id)
+
+        # Test listing with various filters
+        queues = [queue async for queue in async_client.list_annotation_queues(queue_ids=queue_ids[:2], limit=2)]
+        assert len(queues) == 2
+
+        # Test name filter
+        queues = [queue async for queue in async_client.list_annotation_queues(name=queue_names[0])]
+        assert len(queues) == 1
+        assert queues[0].name == queue_names[0]
+
+        # Test name_contains filter
+        queues = [queue async for queue in async_client.list_annotation_queues(name_contains="test_queue")]
+        assert len(queues) >= 3  # Could be more if other tests left queues
+
+    finally:
+        # Clean up
+        for queue_id in queue_ids:
+            await async_client.delete_annotation_queue(queue_id)
+
+
+@pytest.mark.require_clickhouse
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_annotation_queue_runs(async_client: AsyncClient):
+    """Test managing runs within an annotation queue."""
+    queue_name = f"test_queue_{uuid.uuid4().hex[:8]}"
+    project_name = f"test_project_{uuid.uuid4().hex[:8]}"
+
+    # Create a queue
+    queue = await async_client.create_annotation_queue(name=queue_name, description="Test queue")
+
+    # Create some test runs
+    run_ids = [uuid7() for _ in range(3)]
+    for i, run_id in enumerate(run_ids):
+        await async_client.create_run(
+            name=f"test_run_{i}",
+            inputs={"input": f"test_{i}"},
+            run_type="llm",
+            project_name=project_name,
+            start_time=datetime.datetime.now(datetime.timezone.utc),
+            id=run_id,
+        )
+
+    async def _get_run(run_id: uuid.UUID) -> bool:
+        try:
+            await async_client.read_run(run_id)  # type: ignore
+            return True
+        except ls_utils.LangSmithError:
+            return False
+
+    await asyncio.gather(*[wait_for(_get_run, run_id=run_id) for run_id in run_ids])
+    # Add runs to queue
+    await async_client.add_runs_to_annotation_queue(queue_id=queue.id, run_ids=run_ids)
+
+    # Test getting run at index
+    run_info = await async_client.get_run_from_annotation_queue(queue_id=queue.id, index=0)
+    assert run_info.id in run_ids
+
+    # Test listing all runs in the queue
+    listed = [r async for r in async_client.list_runs_from_annotation_queue(queue.id)]
+    assert sorted([r.id for r in listed]) == sorted(run_ids)
+
+    # Test limit
+    limited = [r async for r in async_client.list_runs_from_annotation_queue(queue.id, limit=1)]
+    assert len(limited) == 1
+
+    # Test deleting a run from queue
+    await async_client.delete_run_from_annotation_queue(queue_id=queue.id, run_id=run_ids[2])
+
+    # Test that runs are deleted
+    with pytest.raises(ls_utils.LangSmithNotFoundError):
+        await async_client.get_run_from_annotation_queue(queue_id=queue.id, index=2)
+
+    run_1 = await async_client.get_run_from_annotation_queue(queue_id=queue.id, index=0)
+    run_2 = await async_client.get_run_from_annotation_queue(queue_id=queue.id, index=1)
+    assert sorted([run_1.id, run_2.id]) == sorted(run_ids[:2])
+
+    remaining = [r async for r in async_client.list_runs_from_annotation_queue(queue.id)]
+    assert sorted([r.id for r in remaining]) == sorted(run_ids[:2])
+
+    # Clean up
+    await async_client.delete_annotation_queue(queue.id)

@@ -1,0 +1,8190 @@
+"""Test the LangSmith client."""
+
+import asyncio
+import dataclasses
+import gc
+import inspect
+import io
+import itertools
+import json
+import logging
+import math
+import os
+import pathlib
+import ssl
+import sys
+import threading
+import time
+import urllib.parse
+import uuid
+import warnings
+import weakref
+from collections.abc import Generator
+from datetime import date, datetime, timezone
+from enum import Enum
+from io import BytesIO
+from types import SimpleNamespace
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Type,
+    Union,
+)
+from unittest import mock
+from unittest.mock import MagicMock, patch
+
+import dataclasses_json
+import httpx
+import pytest
+import requests
+from multipart import MultipartParser, MultipartPart, parse_options_header
+from pydantic import BaseModel, field_serializer
+from requests import HTTPError
+
+import langsmith.env as ls_env
+import langsmith.utils as ls_utils
+from langsmith import AsyncClient, EvaluationResult, aevaluate, evaluate, run_trees
+from langsmith import client as ls_client
+from langsmith import schemas as ls_schemas
+from langsmith._internal import _agent_addressing, _operations, _orjson
+from langsmith._internal._beta_decorator import (
+    LangSmithBetaWarning,
+    _warn_once,
+)
+from langsmith._internal._beta_decorator import (
+    suppress_deprecation_warning as _suppress_deprecation_warning,
+)
+from langsmith._internal._multipart import MultipartPartsAndContext
+from langsmith._internal._sampling import is_sampled_by_id
+from langsmith._internal._serde import _serialize_json
+from langsmith.anonymizer import SECRET_PLACEHOLDER, create_secret_anonymizer
+from langsmith.client import (
+    Client,
+    _apply_auth_overrides,
+    _apply_optional_api_key,
+    _attachment_references_filesystem,
+    _check_backend_version,
+    _construct_url,
+    _convert_stored_attachments_to_attachments_dict,
+    _dataset_examples_path,
+    _default_retry_config,
+    _dumps_json,
+    _get_openapi_base_url,
+    _httpx_kwargs_from_session,
+    _is_langchain_hosted,
+    _parse_token_or_url,
+    _reject_filesystem_attachments,
+    _resolve_tracing_mode,
+)
+from langsmith.evaluation.evaluator import RunEvaluator
+from langsmith.run_trees import RunTree
+from langsmith.utils import LangSmithRateLimitError, LangSmithUserError
+from tests.unit_tests.conftest import parse_request_data
+
+_CREATED_AT = datetime(2015, 1, 1, 0, 0, 0)
+
+
+def test_is_localhost() -> None:
+    assert ls_utils._is_localhost("http://localhost:1984")
+    assert ls_utils._is_localhost("http://localhost:1984")
+    assert ls_utils._is_localhost("http://0.0.0.0:1984")
+    assert not ls_utils._is_localhost("http://example.com:1984")
+
+
+_VERSION_LOGGER = "langsmith._internal._backend_version"
+
+
+def _version_warnings(caplog: pytest.LogCaptureFixture) -> List[logging.LogRecord]:
+    """Only the version-check warnings, ignoring other langsmith.client noise."""
+    return [record for record in caplog.records if record.name == _VERSION_LOGGER]
+
+
+@pytest.mark.parametrize(
+    "version,expect_warning",
+    [
+        ("0.15.9", True),
+        ("0.15.4rc1", True),
+        ("0.16.0", False),
+        ("0.16.1", False),
+        ("0.16.4rc1", False),
+        ("0.17.0", False),
+        ("", False),
+        ("not-a-version", True),
+    ],
+)
+def test_check_backend_version(version: str, expect_warning: bool, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=_VERSION_LOGGER):
+        _check_backend_version(version, min_version="0.16.0")
+    assert bool(_version_warnings(caplog)) is expect_warning, f"version {version!r} vs min 0.16.0"
+
+
+def test_check_backend_version_warning_links_to_docs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=_VERSION_LOGGER):
+        _check_backend_version("0.15.0", min_version="0.16.0")
+    message = _version_warnings(caplog)[0].getMessage()
+    assert "0.15.0" in message
+    assert "0.16.0" in message
+    assert "https://docs.langchain.com/langsmith/smithdb-sdk-migration" in message
+
+
+@pytest.mark.parametrize("version,expect_warning", [("0.15.9", True), ("0.16.0", False)])
+def test_client_resource_version_check(version: str, expect_warning: bool, caplog: pytest.LogCaptureFixture) -> None:
+    """Accessing a v2 resource runs the check against the resource's min version.
+
+    Guards the `min_version` calls in the resource properties: drop one, or
+    declare a version below 0.16.0, and this fails.
+    """
+    client = Client(api_url="http://localhost:1984", api_key="test")
+    client._info = ls_schemas.LangSmithInfo(version=version)
+    with caplog.at_level(logging.WARNING, logger=_VERSION_LOGGER):
+        _ = client.runs
+    assert bool(_version_warnings(caplog)) is expect_warning
+
+
+def test__is_langchain_hosted() -> None:
+    assert _is_langchain_hosted("https://api.smith.langchain.com")
+    assert _is_langchain_hosted("https://beta.api.smith.langchain.com")
+    assert _is_langchain_hosted("https://dev.api.smith.langchain.com")
+
+
+@pytest.mark.parametrize(
+    "urllib3_version",
+    ["1.26.0", "2.5.0", "2.5.0+cgr.2", "2.6.3+abc.def.4", "1.25.99"],
+)
+def test__default_retry_config_handles_pep440_local_versions(
+    monkeypatch: pytest.MonkeyPatch, urllib3_version: str
+) -> None:
+    import importlib.metadata
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: urllib3_version)
+    _default_retry_config.cache_clear()
+    try:
+        retry = _default_retry_config()
+    finally:
+        _default_retry_config.cache_clear()
+    assert retry is not None
+
+
+def _clear_env_cache():
+    ls_utils.get_env_var.cache_clear()
+
+
+def test_validate_api_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Scenario 1: Both LANGCHAIN_ENDPOINT and LANGSMITH_ENDPOINT
+    # are set, but api_url is not
+    _clear_env_cache()
+    monkeypatch.setenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain-endpoint.com")
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", "https://api.smith.langsmith-endpoint.com")
+
+    client = Client(auto_batch_tracing=False)
+    assert client.api_url == "https://api.smith.langsmith-endpoint.com"
+
+    # Scenario 2: Both LANGCHAIN_ENDPOINT and LANGSMITH_ENDPOINT
+    #  are set, and api_url is set
+    _clear_env_cache()
+    monkeypatch.setenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain-endpoint.com")
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", "https://api.smith.langsmith-endpoint.com")
+
+    client = Client(
+        api_url="https://api.smith.langchain.com",
+        api_key="123",
+        auto_batch_tracing=False,
+    )
+    assert client.api_url == "https://api.smith.langchain.com"
+
+    # Scenario 3: LANGCHAIN_ENDPOINT is set, but LANGSMITH_ENDPOINT is not
+    _clear_env_cache()
+    monkeypatch.setenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain-endpoint.com")
+    monkeypatch.delenv("LANGSMITH_ENDPOINT", raising=False)
+
+    client = Client(auto_batch_tracing=False)
+    assert client.api_url == "https://api.smith.langchain-endpoint.com"
+
+    # Scenario 4: LANGCHAIN_ENDPOINT is not set, but LANGSMITH_ENDPOINT is set
+    _clear_env_cache()
+    monkeypatch.delenv("LANGCHAIN_ENDPOINT", raising=False)
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", "https://api.smith.langsmith-endpoint.com")
+
+    client = Client(auto_batch_tracing=False)
+    assert client.api_url == "https://api.smith.langsmith-endpoint.com"
+
+
+def test_client_init_does_not_eagerly_initialize_openapi_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NO_PROXY", "::/0")
+    monkeypatch.setenv("no_proxy", "::/0")
+
+    client = Client(
+        api_url="https://api.smith.langchain.com",
+        api_key="test-api-key",
+        auto_batch_tracing=False,
+    )
+
+    assert client._langsmith_api is None
+
+
+def test_validate_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Scenario 1: Both LANGCHAIN_API_KEY and LANGSMITH_API_KEY are set,
+    # but api_key is not
+    _clear_env_cache()
+    monkeypatch.setenv("LANGCHAIN_API_KEY", "env_langchain_api_key")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "env_langsmith_api_key")
+
+    client = Client()
+    assert client.api_key == "env_langsmith_api_key"
+
+    # Scenario 2: Both LANGCHAIN_API_KEY and LANGSMITH_API_KEY are set,
+    # and api_key is set
+    _clear_env_cache()
+    monkeypatch.setenv("LANGCHAIN_API_KEY", "env_langchain_api_key")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "env_langsmith_api_key")
+
+    client = Client(api_url="https://api.smith.langchain.com", api_key="123")
+    assert client.api_key == "123"
+
+    # Scenario 3: LANGCHAIN_API_KEY is set, but LANGSMITH_API_KEY is not
+    monkeypatch.setenv("LANGCHAIN_API_KEY", "env_langchain_api_key")
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+
+    client = Client()
+    assert client.api_key == "env_langchain_api_key"
+
+    # Scenario 4: LANGCHAIN_API_KEY is not set, but LANGSMITH_API_KEY is set
+    _clear_env_cache()
+    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    monkeypatch.setenv("LANGSMITH_API_KEY", "env_langsmith_api_key")
+
+    client = Client()
+    assert client.api_key == "env_langsmith_api_key"
+
+
+def _clear_profile_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_env_cache()
+    for key in (
+        "LANGCHAIN_API_KEY",
+        "LANGSMITH_API_KEY",
+        "LANGCHAIN_ENDPOINT",
+        "LANGSMITH_ENDPOINT",
+        "LANGCHAIN_WORKSPACE_ID",
+        "LANGSMITH_WORKSPACE_ID",
+        "LANGSMITH_PROFILE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_client_logs_where_api_url_came_from(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, caplog) -> None:
+    _clear_profile_env(monkeypatch)
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(tmp_path / "missing.json"))
+
+    with caplog.at_level(logging.DEBUG, logger="langsmith.client"):
+        Client(api_key="123")
+    assert ("LangSmith API URL https://api.smith.langchain.com resolved from built-in default") in caplog.messages
+
+    caplog.clear()
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", "https://eu.api.smith.langchain.com")
+    with caplog.at_level(logging.DEBUG, logger="langsmith.client"):
+        Client(api_key="123")
+    assert (
+        "LangSmith API URL https://eu.api.smith.langchain.com resolved from "
+        "LANGSMITH_ENDPOINT / LANGCHAIN_ENDPOINT environment variable"
+    ) in caplog.messages
+
+
+def test_profile_config_loads_api_key_and_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    _clear_profile_env(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "current_profile": "prod",
+                "profiles": {
+                    "prod": {
+                        "api_key": "profile-key",
+                        "api_url": "https://profile.example.com",
+                        "workspace_id": "workspace-id",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(config_path))
+
+    client = Client(auto_batch_tracing=False)
+
+    assert client.api_url == "https://profile.example.com"
+    assert client.api_key == "profile-key"
+    assert client.workspace_id == "workspace-id"
+    assert client._headers["x-api-key"] == "profile-key"
+    assert client._headers["X-Tenant-Id"] == "workspace-id"
+
+
+def test_profile_config_uses_api_key_before_oauth_access_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    _clear_profile_env(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "default": {
+                        "api_key": "profile-key",
+                        "oauth": {"access_token": "profile-access-token"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(config_path))
+
+    client = Client(auto_batch_tracing=False)
+
+    assert client.api_key is None
+    assert client._headers["x-api-key"] == "profile-key"
+    assert "Authorization" not in client._headers
+
+
+def test_profile_config_env_auth_suppresses_profile_auth(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    _clear_profile_env(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "default": {
+                        "api_key": "profile-key",
+                        "api_url": "https://profile.example.com",
+                        "workspace_id": "workspace-id",
+                        "oauth": {"access_token": "profile-access-token"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv("LANGSMITH_API_KEY", "env-key")
+    _clear_env_cache()
+
+    client = Client(auto_batch_tracing=False)
+
+    assert client.api_url == "https://profile.example.com"
+    assert client.workspace_id == "workspace-id"
+    assert client.api_key == "env-key"
+    assert client._headers["x-api-key"] == "env-key"
+    assert "Authorization" not in client._headers
+
+
+def test_profile_config_constructor_auth_suppresses_profile_auth(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    _clear_profile_env(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "default": {
+                        "api_key": "profile-key",
+                        "api_url": "https://profile.example.com",
+                        "oauth": {
+                            "access_token": "old-access-token",
+                            "refresh_token": "old-refresh-token",
+                            "expires_at": "2000-01-01T00:00:00Z",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(config_path))
+    mock_post = mock.Mock()
+    monkeypatch.setattr(requests, "post", mock_post)
+
+    client = Client(api_key="constructor-key", auto_batch_tracing=False)
+
+    assert client.api_url == "https://profile.example.com"
+    assert client.api_key == "constructor-key"
+    assert client._headers["x-api-key"] == "constructor-key"
+    assert "Authorization" not in client._headers
+    mock_post.assert_not_called()
+
+
+def test_profile_config_refreshes_expired_oauth_token(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    _clear_profile_env(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "default": {
+                        "api_url": "https://profile.example.com",
+                        "oauth": {
+                            "access_token": "old-access-token",
+                            "refresh_token": "old-refresh-token",
+                            "expires_at": "2000-01-01T00:00:00Z",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(config_path))
+    calls = []
+
+    def mock_post(url: str, **kwargs: object) -> mock.Mock:
+        calls.append((url, kwargs))
+        response = mock.Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "expires_in": 300,
+        }
+        return response
+
+    monkeypatch.setattr(requests, "post", mock_post)
+
+    client = Client(auto_batch_tracing=False)
+
+    assert client._headers["Authorization"] == "Bearer old-access-token"
+    assert calls == []
+
+    request_calls = []
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+
+    def mock_request(method: str, url: str, **kwargs: object) -> mock.Mock:
+        request_calls.append((method, url, kwargs))
+        return response
+
+    monkeypatch.setattr(client.session, "request", mock_request)
+
+    client.request_with_retries("GET", "/info")
+
+    assert client._headers["Authorization"] == "Bearer new-access-token"
+    assert request_calls[0][2]["headers"]["Authorization"] == ("Bearer new-access-token")
+    assert calls[0][0] == "https://profile.example.com/oauth/token"
+    assert calls[0][1]["data"] == {
+        "grant_type": "refresh_token",
+        "client_id": "langsmith-cli",
+        "refresh_token": "old-refresh-token",
+    }
+    updated = json.loads(config_path.read_text(encoding="utf-8"))
+    assert updated["profiles"]["default"]["oauth"]["access_token"] == "new-access-token"
+    assert updated["profiles"]["default"]["oauth"]["refresh_token"] == "new-refresh-token"
+    assert "token_type" not in updated["profiles"]["default"]["oauth"]
+    assert "bearer_token" not in updated["profiles"]["default"]
+
+
+def test_profile_config_refresh_replaces_snapshotted_auth_headers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    _clear_profile_env(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "default": {
+                        "api_url": "https://profile.example.com",
+                        "oauth": {
+                            "access_token": "old-access-token",
+                            "refresh_token": "old-refresh-token",
+                            "expires_at": "2000-01-01T00:00:00Z",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(config_path))
+
+    def mock_post(url: str, **kwargs: object) -> mock.Mock:
+        response = mock.Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "expires_in": 300,
+        }
+        return response
+
+    monkeypatch.setattr(requests, "post", mock_post)
+    client = Client(auto_batch_tracing=False)
+    snapshotted_headers = dict(client._headers)
+    request_calls = []
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+
+    def mock_request(method: str, url: str, **kwargs: object) -> mock.Mock:
+        request_calls.append((method, url, kwargs))
+        return response
+
+    monkeypatch.setattr(client.session, "request", mock_request)
+
+    client.request_with_retries(
+        "GET",
+        "/info",
+        request_kwargs={"headers": snapshotted_headers},
+    )
+
+    assert request_calls[0][2]["headers"]["Authorization"] == ("Bearer new-access-token")
+
+
+def test_profile_config_refresh_preserves_explicit_auth_headers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    _clear_profile_env(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "default": {
+                        "api_url": "https://profile.example.com",
+                        "oauth": {
+                            "access_token": "old-access-token",
+                            "refresh_token": "old-refresh-token",
+                            "expires_at": "2000-01-01T00:00:00Z",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(config_path))
+
+    def mock_post(url: str, **kwargs: object) -> mock.Mock:
+        response = mock.Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "expires_in": 300,
+        }
+        return response
+
+    monkeypatch.setattr(requests, "post", mock_post)
+    client = Client(auto_batch_tracing=False)
+    request_calls = []
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+
+    def mock_request(method: str, url: str, **kwargs: object) -> mock.Mock:
+        request_calls.append((method, url, kwargs))
+        return response
+
+    monkeypatch.setattr(client.session, "request", mock_request)
+
+    client.request_with_retries(
+        "GET",
+        "/info",
+        request_kwargs={"headers": {"Authorization": "Bearer explicit-token"}},
+    )
+
+    assert request_calls[0][2]["headers"]["Authorization"] == ("Bearer explicit-token")
+
+
+def test_profile_config_refresh_uses_profile_api_url(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    _clear_profile_env(monkeypatch)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "profiles": {
+                    "default": {
+                        "api_url": "https://profile.example.com",
+                        "oauth": {
+                            "access_token": "old-access-token",
+                            "refresh_token": "old-refresh-token",
+                            "expires_at": "2000-01-01T00:00:00Z",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(config_path))
+    calls = []
+
+    def mock_post(url: str, **kwargs: object) -> mock.Mock:
+        calls.append((url, kwargs))
+        response = mock.Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "expires_in": 300,
+        }
+        return response
+
+    monkeypatch.setattr(requests, "post", mock_post)
+    client = Client(
+        api_url="https://override.example.com",
+        auto_batch_tracing=False,
+    )
+    request_calls = []
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+
+    def mock_request(method: str, url: str, **kwargs: object) -> mock.Mock:
+        request_calls.append((method, url, kwargs))
+        return response
+
+    monkeypatch.setattr(client.session, "request", mock_request)
+
+    client.request_with_retries("GET", "/info")
+
+    assert calls[0][0] == "https://profile.example.com/oauth/token"
+    assert request_calls[0][1] == "https://override.example.com/info"
+    assert request_calls[0][2]["headers"]["Authorization"] == ("Bearer new-access-token")
+
+
+def test_validate_multiple_urls() -> None:
+    """Test URL validation without environment variable manipulation."""
+    _clear_env_cache()
+
+    # Test 1: Multiple conflicting endpoint environment variables should raise error
+    with patch.dict(
+        os.environ,
+        {
+            "LANGCHAIN_ENDPOINT": "https://api.smith.langchain-endpoint.com",
+            "LANGSMITH_ENDPOINT": "https://api.smith.langsmith-endpoint.com",
+            "LANGSMITH_RUNS_ENDPOINTS": "{}",
+        },
+        clear=True,
+    ):
+        with pytest.raises(ls_utils.LangSmithUserError):
+            Client()
+
+    # Test 2: Conflicting api_url parameter and api_urls parameter should raise error
+    with patch.dict(os.environ, {}, clear=True):
+        with pytest.raises(ls_utils.LangSmithUserError):
+            Client(
+                api_url="https://api.smith.langchain.com",
+                api_key="123",
+                api_urls={"https://api.smith.langchain.com": "123"},
+            )
+
+    # Test 3: LANGSMITH_RUNS_ENDPOINTS should not affect _write_api_urls
+    data = {
+        "https://api.smith.langsmith-endpoint_1.com": "123",
+        "https://api.smith.langsmith-endpoint_2.com": "456",
+        "https://api.smith.langsmith-endpoint_3.com": "789",
+    }
+    with patch.dict(os.environ, {"LANGSMITH_RUNS_ENDPOINTS": json.dumps(data)}, clear=True):
+        client = Client(auto_batch_tracing=False)
+        # _write_api_urls should only contain the default endpoint
+        assert len(client._write_api_urls) == 1
+        # The default API URL should be used
+        assert client.api_url == "https://api.smith.langchain.com"
+
+    # Test 4: Setting api_urls should still be respected
+    with patch.dict(os.environ, {}, clear=True):
+        client = Client(api_urls=data)
+        assert client._write_api_urls == data
+        assert client.api_url == "https://api.smith.langsmith-endpoint_1.com"
+        assert client.api_key == "123"
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_env_cache()
+    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    with patch.dict("os.environ", {}, clear=True):
+        client = Client(api_url="http://localhost:1984", api_key="123")
+        assert "x-api-key" in client._headers
+        assert client._headers["x-api-key"] == "123"
+
+        client_no_key = Client(api_url="http://localhost:1984")
+        assert "x-api-key" not in client_no_key._headers
+
+
+def test_apply_optional_api_key() -> None:
+    headers = {
+        "x-api-key": "old",
+        "X-API-KEY": "old-upper",
+        "other": "value",
+    }
+
+    updated = _apply_optional_api_key(headers, None)
+    assert "x-api-key" not in updated
+    assert "X-API-KEY" not in updated
+    assert updated["other"] == "value"
+
+    updated = _apply_optional_api_key({"other": "value"}, "new-key")
+    assert updated["x-api-key"] == "new-key"
+
+
+def test_apply_auth_overrides() -> None:
+    headers = {
+        "x-api-key": "old",
+        "other": "value",
+    }
+
+    updated = _apply_auth_overrides(
+        headers,
+        api_key=None,
+        service_key=None,
+        tenant_id=None,
+        authorization="Bearer abc",
+        cookie="session=xyz",
+        fallback_api_key="fallback",
+    )
+    assert "x-api-key" not in updated
+    assert updated["Authorization"] == "Bearer abc"
+    assert updated["Cookie"] == "session=xyz"
+    assert updated["other"] == "value"
+
+    updated = _apply_auth_overrides(
+        {"other": "value"},
+        api_key="explicit",
+        service_key="svc",
+        tenant_id="tenant",
+        authorization=None,
+        cookie=None,
+        fallback_api_key="fallback",
+    )
+    assert updated["x-api-key"] == "explicit"
+    assert updated["X-Service-Key"] == "svc"
+    assert updated["X-Tenant-Id"] == "tenant"
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_cached_header_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_env_cache()
+    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+    with patch.dict("os.environ", {}, clear=True):
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="123",
+            timeout_ms=(2000, 4000),
+            auto_batch_tracing=False,
+        )
+        assert client._timeout == (2.0, 4.0)
+        assert client._headers["x-api-key"] == "123"
+        # Changing API key should update headers
+        client.api_key = "abc"
+        assert client._headers["x-api-key"] == "abc"
+
+        mock_response = MagicMock()
+        client.session.request.return_value = mock_response
+        with patch("langsmith.client.ls_utils.raise_for_status_with_text"):
+            client.request_with_retries("GET", "/test")
+        args, kwargs = client.session.request.call_args
+        assert kwargs["timeout"] == client._timeout
+        assert kwargs["headers"]["x-api-key"] == "abc"
+
+
+@pytest.mark.parametrize(
+    ("api_url", "expected_url"),
+    [
+        ("http://localhost:1984", "http://localhost:1984/v1/platform/issues"),
+        (
+            "http://localhost:1984/api/v1",
+            "http://localhost:1984/api/v1/platform/issues",
+        ),
+    ],
+)
+def test_list_project_issues_uses_platform_issues_endpoint(api_url: str, expected_url: str) -> None:
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = [{"id": "issue-1"}]
+    mock_session.request.return_value = mock_response
+
+    client = Client(api_url=api_url, api_key="test", session=mock_session)
+    issues = client.list_project_issues("my-project", status="open", priority="high")
+
+    assert issues == [{"id": "issue-1"}]
+    args, kwargs = mock_session.request.call_args
+    assert args[0] == "GET"
+    assert args[1] == expected_url
+    assert kwargs["params"] == {
+        "session_name": "my-project",
+        "status": "open",
+        "priority": "high",
+    }
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_upload_csv(mock_session_cls: mock.Mock) -> None:
+    _clear_env_cache()
+    dataset_id = str(uuid.uuid4())
+    example_1 = ls_schemas.Example(
+        id=str(uuid.uuid4()),
+        created_at=_CREATED_AT,
+        inputs={"input": "1"},
+        outputs={"output": "2"},
+        dataset_id=dataset_id,
+    )
+    example_2 = ls_schemas.Example(
+        id=str(uuid.uuid4()),
+        created_at=_CREATED_AT,
+        inputs={"input": "3"},
+        outputs={"output": "4"},
+        dataset_id=dataset_id,
+    )
+    mock_response = mock.Mock()
+    mock_response.json.return_value = {
+        "id": dataset_id,
+        "name": "test.csv",
+        "description": "Test dataset",
+        "owner_id": "the owner",
+        "created_at": _CREATED_AT,
+        "examples": [example_1, example_2],
+    }
+    mock_session = mock.Mock()
+
+    def mock_request(*args, **kwargs):  # type: ignore
+        if args[0] == "POST" and args[1].endswith("datasets"):
+            return mock_response
+        return MagicMock()
+
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+    )
+    client._tenant_id = uuid.uuid4()
+    csv_file = ("test.csv", BytesIO(b"input,output\n1,2\n3,4\n"))
+
+    dataset = client.upload_csv(
+        csv_file,
+        description="Test dataset",
+        input_keys=["input"],
+        output_keys=["output"],
+    )
+
+    assert dataset.id == uuid.UUID(dataset_id)
+    assert dataset.name == "test.csv"
+    assert dataset.description == "Test dataset"
+
+
+def test_async_methods() -> None:
+    """For every method defined on the Client, if there is a
+
+    corresponding async method, then the async method args should be a
+    superset of the sync method args.
+    """
+    sync_methods = [
+        method
+        for method in dir(Client)
+        if not method.startswith("_")
+        and callable(getattr(Client, method))
+        and not asyncio.iscoroutinefunction(getattr(Client, method))
+    ]
+    async_methods = [
+        method
+        for method in dir(Client)
+        if not method.startswith("_")
+        and callable(getattr(Client, method))
+        and asyncio.iscoroutinefunction(getattr(Client, method))
+    ]
+
+    for async_method in async_methods:
+        sync_method = async_method[1:]  # Remove the "a" from the beginning
+        assert sync_method in sync_methods
+        sync_args = set(inspect.signature(Client.__dict__[sync_method]).parameters)
+        async_args = set(inspect.signature(Client.__dict__[async_method]).parameters)
+        extra_args = sync_args - async_args
+        assert not extra_args, f"Extra args for {async_method} (compared to {sync_method}): {extra_args}"
+
+
+def test_create_run_unicode() -> None:
+    inputs = {
+        "foo": "これは私の友達です",
+        "bar": "این یک کتاب است",
+        "baz": "😊🌺🎉💻🚀🌈🍕🏄‍♂️🎁🐶🌟🏖️👍🚲🎈",
+        "qux": "나는\u3000밥을\u3000먹었습니다.",
+        "는\u3000밥": "나는\u3000밥을\u3000먹었습니다.",
+    }
+    session = mock.Mock()
+    session.request = mock.Mock()
+    client = Client(api_url="http://localhost:1984", api_key="123", session=session)
+    id_ = uuid.uuid4()
+    client.create_run("my_run", inputs=inputs, run_type="llm", id=id_)
+    client.update_run(id_, status="completed")
+
+
+def test_evaluators_uses_generated_openapi_resource() -> None:
+    resource = object()
+
+    with mock.patch("langsmith.client.LangsmithOpenAPIClient") as openapi_client:
+        openapi_client.return_value.online_evaluators = resource
+
+        client = Client(
+            api_url="http://localhost:8080",
+            api_key="test-api-key",
+            workspace_id="test-workspace-id",
+            timeout_ms=(1234, 5678),
+            info=ls_schemas.LangSmithInfo(),
+        )
+
+        assert client.evaluators is resource
+
+    openapi_client.assert_called_once()
+    assert openapi_client.call_args.kwargs["api_key"] == "test-api-key"
+    assert openapi_client.call_args.kwargs["tenant_id"] == "test-workspace-id"
+    assert openapi_client.call_args.kwargs["base_url"] == "http://localhost:8080"
+    timeout = openapi_client.call_args.kwargs["timeout"]
+    assert timeout.connect == 1.234
+    assert timeout.read == 5.678
+
+
+def test_annotation_queues_uses_generated_openapi_resource() -> None:
+    resource = object()
+
+    with mock.patch("langsmith.client.LangsmithOpenAPIClient") as openapi_client:
+        openapi_client.return_value.annotation_queues = resource
+
+        client = Client(
+            api_url="http://localhost:8080",
+            api_key="test-api-key",
+            workspace_id="test-workspace-id",
+            timeout_ms=(1234, 5678),
+            info=ls_schemas.LangSmithInfo(),
+        )
+
+        assert client.annotation_queues is resource
+
+    openapi_client.assert_called_once()
+    assert openapi_client.call_args.kwargs["api_key"] == "test-api-key"
+    assert openapi_client.call_args.kwargs["tenant_id"] == "test-workspace-id"
+    assert openapi_client.call_args.kwargs["base_url"] == "http://localhost:8080"
+    timeout = openapi_client.call_args.kwargs["timeout"]
+    assert timeout.connect == 1.234
+    assert timeout.read == 5.678
+
+
+def test_async_evaluators_uses_generated_openapi_resource() -> None:
+    resource = object()
+
+    with mock.patch("langsmith.AsyncLangsmith") as openapi_client:
+        openapi_client.return_value.online_evaluators = resource
+
+        client = AsyncClient(
+            api_url="http://localhost:8080",
+            api_key="test-api-key",
+            workspace_id="test-workspace-id",
+            timeout_ms=(1234, 5678),
+        )
+
+        assert client.evaluators is resource
+
+    openapi_client.assert_called_once()
+    assert openapi_client.call_args.kwargs["api_key"] == "test-api-key"
+    assert openapi_client.call_args.kwargs["tenant_id"] == "test-workspace-id"
+    assert openapi_client.call_args.kwargs["base_url"] == "http://localhost:8080"
+    timeout = openapi_client.call_args.kwargs["timeout"]
+    assert timeout.connect == 1.234
+    assert timeout.read == 5.678
+    assert openapi_client.call_args.kwargs["default_headers"]["X-Tenant-Id"] == "test-workspace-id"
+
+
+def test_async_annotation_queues_uses_generated_openapi_resource() -> None:
+    resource = object()
+
+    with mock.patch("langsmith.AsyncLangsmith") as openapi_client:
+        openapi_client.return_value.annotation_queues = resource
+
+        client = AsyncClient(
+            api_url="http://localhost:8080",
+            api_key="test-api-key",
+            workspace_id="test-workspace-id",
+            timeout_ms=(1234, 5678),
+        )
+
+        assert client.annotation_queues is resource
+
+    openapi_client.assert_called_once()
+    assert openapi_client.call_args.kwargs["api_key"] == "test-api-key"
+    assert openapi_client.call_args.kwargs["tenant_id"] == "test-workspace-id"
+    assert openapi_client.call_args.kwargs["base_url"] == "http://localhost:8080"
+    timeout = openapi_client.call_args.kwargs["timeout"]
+    assert timeout.connect == 1.234
+    assert timeout.read == 5.678
+    assert openapi_client.call_args.kwargs["default_headers"]["X-Tenant-Id"] == "test-workspace-id"
+
+
+@pytest.mark.parametrize("use_multipart_endpoint", (True, False))
+def test_create_run_mutate(use_multipart_endpoint: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    inputs = {"messages": ["hi"], "mygen": (i for i in range(10))}
+    session = mock.Mock()
+    session.request = mock.Mock()
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        session=session,
+        info=ls_schemas.LangSmithInfo(
+            batch_ingest_config=ls_schemas.BatchIngestConfig(
+                use_multipart_endpoint=use_multipart_endpoint,
+                size_limit_bytes=None,  # Note this field is not used here
+                size_limit=100,
+                scale_up_nthreads_limit=16,
+                scale_up_qsize_trigger=1000,
+                scale_down_nempty_trigger=4,
+            )
+        ),
+    )
+    id_ = uuid.uuid4()
+    run_dict = dict(
+        id=id_,
+        name="my_run",
+        inputs=inputs,
+        run_type="llm",
+        trace_id=id_,
+        dotted_order=run_trees._create_current_dotted_order(datetime.now(timezone.utc), id_),
+    )
+    client.create_run(**run_dict)  # type: ignore
+    inputs["messages"].append("there")  # type: ignore
+    outputs = {"messages": ["hi", "there"]}
+    client.update_run(
+        id_,
+        outputs=outputs,
+        end_time=datetime.now(timezone.utc),
+        trace_id=id_,
+        dotted_order=run_dict["dotted_order"],
+    )
+    if use_multipart_endpoint:
+        for _ in range(10):
+            time.sleep(0.1)  # Give the background thread time to stop
+            payloads = [
+                (call[2]["headers"], call[2]["data"])
+                for call in session.request.mock_calls
+                if call.args and call.args[1].endswith("runs/multipart")
+            ]
+            if payloads:
+                break
+        else:
+            assert False, "No payloads found"
+
+        parts: List[MultipartPart] = []
+        for payload in payloads:
+            headers, data = payload
+            assert headers["Content-Type"].startswith("multipart/form-data")
+            # this is a current implementation detail, if we change implementation
+            # we update this assertion
+            assert isinstance(data, bytes)
+            boundary = parse_options_header(headers["Content-Type"])[1]["boundary"]
+            parser = MultipartParser(io.BytesIO(data), boundary)
+            parts.extend(parser.parts())
+
+        assert [p.name for p in parts] == [
+            f"post.{id_}",
+            f"post.{id_}.inputs",
+            f"post.{id_}.outputs",
+            f"post.{id_}.extra",
+        ]
+        assert [p.headers.get("content-type") for p in parts] == [
+            "application/json",
+            "application/json",
+            "application/json",
+            "application/json",
+        ]
+        outputs_parsed = json.loads(parts[2].value)
+        assert outputs_parsed == outputs
+        inputs_parsed = json.loads(parts[1].value)
+        assert inputs_parsed["messages"] == ["hi"]
+        assert inputs_parsed["mygen"].startswith(  # type: ignore
+            "<generator object test_create_run_mutate.<locals>."
+        )
+        run_parsed = json.loads(parts[0].value)
+        assert "inputs" not in run_parsed
+        assert "outputs" not in run_parsed
+        assert run_parsed["trace_id"] == str(id_)
+        assert run_parsed["dotted_order"] == run_dict["dotted_order"]
+    else:
+        for _ in range(10):
+            time.sleep(0.1)  # Give the background thread time to stop
+            payloads = [
+                parse_request_data(call[2]["data"])
+                for call in session.request.mock_calls
+                if call.args and (call.args[1].endswith("runs/batch") or call.args[1].endswith("runs/multipart"))
+            ]
+            if payloads:
+                break
+        else:
+            assert False, "No payloads found"
+        posts = [pr for payload in payloads for pr in payload.get("post", [])]
+        patches = [pr for payload in payloads for pr in payload.get("patch", [])]
+        inputs = next(
+            (pr["inputs"] for pr in itertools.chain(posts, patches) if pr.get("inputs")),
+            {},
+        )
+        outputs = next(
+            (pr["outputs"] for pr in itertools.chain(posts, patches) if pr.get("outputs")),
+            {},
+        )
+        # Check that the mutated value wasn't posted
+        assert "messages" in inputs
+        assert inputs["messages"] == ["hi"]
+        assert "mygen" in inputs
+        assert inputs["mygen"].startswith(  # type: ignore
+            "<generator object test_create_run_mutate.<locals>."
+        )
+        assert outputs == {"messages": ["hi", "there"]}
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_upsert_examples_multipart(mock_session_cls: mock.Mock) -> None:
+    """Test that upsert_examples_multipart sends correct multipart data."""
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "count": 1,
+        "example_ids": [str(uuid.uuid4())],
+        "as_of": "2024-01-21T10:00:00.123456Z",
+    }
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        info={"instance_flags": {"examples_multipart_enabled": True}},
+    )
+
+    # Create test data
+    example_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
+    created_at = datetime(2015, 1, 1, 0, 0, 0)
+
+    example = ls_schemas.ExampleUpsertWithAttachments(
+        id=example_id,
+        dataset_id=dataset_id,
+        created_at=created_at,
+        inputs={"input": "test input"},
+        outputs={"output": "test output"},
+        metadata={"meta": "data"},
+        split="train",
+        attachments={
+            "file1": ("text/plain", b"test data"),
+            "file2": ls_schemas.Attachment(mime_type="application/json", data=b'{"key": "value"}'),
+        },
+    )
+    response = client.upsert_examples_multipart(upserts=[example])
+
+    # Verify the response structure
+    assert response["count"] == 1
+    assert "example_ids" in response
+    assert "as_of" in response
+    assert isinstance(response["as_of"], str)
+
+    # Verify the request
+    assert mock_session.request.call_count == 1
+    call_args = mock_session.request.call_args
+
+    assert call_args[0][0] == "POST"
+    assert call_args[0][1].endswith("/v1/platform/examples/multipart")
+
+    # Parse the multipart data
+    request_data = call_args[1]["data"]
+    content_type = call_args[1]["headers"]["Content-Type"]
+    boundary = parse_options_header(content_type)[1]["boundary"]
+
+    parser = MultipartParser(
+        io.BytesIO(request_data if isinstance(request_data, bytes) else request_data.to_string()),
+        boundary,
+    )
+    parts = list(parser.parts())
+
+    # Verify all expected parts are present
+    expected_parts = {
+        str(example_id): {
+            "dataset_id": str(dataset_id),
+            "created_at": created_at.isoformat(),
+            "metadata": {"meta": "data"},
+            "split": "train",
+        },
+        f"{example_id}.inputs": {"input": "test input"},
+        f"{example_id}.outputs": {"output": "test output"},
+        f"{example_id}.attachment.file1": "test data",
+        f"{example_id}.attachment.file2": '{"key": "value"}',
+    }
+
+    assert len(parts) == len(expected_parts)
+
+    for part in parts:
+        name = part.name
+        assert name in expected_parts, f"Unexpected part: {name}"
+
+        if name.endswith(".attachment.file1"):
+            assert part.value == expected_parts[name]
+            assert part.headers["Content-Type"] == "text/plain; length=9"
+        elif name.endswith(".attachment.file2"):
+            assert part.value == expected_parts[name]
+            assert part.headers["Content-Type"] == "application/json; length=16"
+        else:
+            value = json.loads(part.value)
+            assert value == expected_parts[name]
+            assert part.headers["Content-Type"] == "application/json"
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_upsert_examples_multipart_missing_file(mock_session_cls: mock.Mock, tmp_path, caplog) -> None:
+    """Attachment file paths that do not exist are skipped."""
+    caplog.set_level(logging.WARNING)
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"result": "ok"}
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        info={"instance_flags": {"examples_multipart_enabled": True}},
+    )
+
+    example_id = uuid.uuid4()
+    dataset_id = uuid.uuid4()
+
+    missing_path = tmp_path / "no-file.txt"
+    example = ls_schemas.ExampleUpsertWithAttachments(
+        id=example_id,
+        dataset_id=dataset_id,
+        created_at=_CREATED_AT,
+        inputs={"input": "test"},
+        outputs={"output": "out"},
+        attachments={
+            "missing": ("text/plain", missing_path),
+            "good": ("text/plain", b"data"),
+        },
+    )
+
+    with caplog.at_level(logging.WARNING):
+        client.upsert_examples_multipart(upserts=[example], dangerously_allow_filesystem=True)
+
+    call_args = mock_session.request.call_args
+    request_data = call_args[1]["data"]
+    content_type = call_args[1]["headers"]["Content-Type"]
+    boundary = parse_options_header(content_type)[1]["boundary"]
+
+    parser = MultipartParser(
+        io.BytesIO(request_data if isinstance(request_data, bytes) else request_data.to_string()),
+        boundary,
+    )
+    parts = list(parser.parts())
+    part_names = [p.name for p in parts]
+
+    assert f"{example_id}.attachment.good" in part_names
+    assert f"{example_id}.attachment.missing" not in part_names
+    assert "Attachment file not found" in caplog.text
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_update_example_multipart_none_preserves_existing(
+    mock_session_cls: mock.Mock,
+) -> None:
+    """Test that updating with None inputs/outputs via multipart preserves existing values."""
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    # Mock the read_example call to return existing example
+    existing_example = ls_schemas.Example(
+        id=str(uuid.uuid4()),
+        dataset_id=str(uuid.uuid4()),
+        inputs={"existing": "input"},
+        outputs={"existing": "output"},
+        created_at=datetime.now(),
+    )
+
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        info={"instance_flags": {"dataset_examples_multipart_enabled": True}},
+    )
+
+    # Mock read_example to return the existing example
+    with mock.patch.object(Client, "read_example", return_value=existing_example):
+        # Update with omitted inputs and outputs
+        client.update_example(
+            example_id=existing_example.id,
+            metadata={"updated": "metadata"},
+        )
+
+    # Verify the multipart request was made
+    assert mock_session.request.call_count == 1
+    call_args = mock_session.request.call_args
+    assert call_args[0][0] == "PATCH"
+    # Check it's calling the correct multipart endpoint
+    assert "/v1/platform/datasets/" in call_args[0][1]
+    assert call_args[0][1].endswith("/examples")
+
+    # Parse the multipart data
+    request_data = call_args[1]["data"]
+    content_type = call_args[1]["headers"]["Content-Type"]
+    boundary = parse_options_header(content_type)[1]["boundary"]
+
+    parser = MultipartParser(
+        io.BytesIO(request_data if isinstance(request_data, bytes) else request_data.to_string()),
+        boundary,
+    )
+    parts = list(parser.parts())
+
+    # Verify that inputs and outputs parts are NOT included (preserving existing values)
+    part_names = [p.name for p in parts]
+    assert str(existing_example.id) in part_names
+    assert f"{existing_example.id}.inputs" not in part_names
+    assert f"{existing_example.id}.outputs" not in part_names
+
+    # Verify the main example part contains updated metadata
+    example_part = next(p for p in parts if p.name == str(existing_example.id))
+    example_data = json.loads(example_part.value)
+    assert example_data["metadata"] == {"updated": "metadata"}
+
+
+class CallTracker:
+    def __init__(self) -> None:
+        self.counter = 0
+
+    def __call__(self, *args: object, **kwargs: object) -> None:
+        self.counter += 1
+
+
+@pytest.mark.flaky(reruns=5)
+@pytest.mark.parametrize("supports_batch_endpoint", [True, False])
+@pytest.mark.parametrize("auto_batch_tracing", [True, False])
+def test_client_gc(auto_batch_tracing: bool, supports_batch_endpoint: bool) -> None:
+    session = mock.MagicMock(spec=requests.Session)
+    api_url = "http://localhost:1984"
+
+    def mock_get(*args, **kwargs):
+        if args[0] == f"{api_url}/info":
+            response = mock.Mock()
+            if supports_batch_endpoint:
+                response.json.return_value = {}
+            else:
+                response.raise_for_status.side_effect = HTTPError()
+                response.status_code = 404
+            return response
+        else:
+            return MagicMock()
+
+    session.get.side_effect = mock_get
+    client = Client(
+        api_url=api_url,
+        api_key="123",
+        auto_batch_tracing=auto_batch_tracing,
+        session=session,
+    )
+    tracker = CallTracker()
+    weakref.finalize(client, tracker)
+    assert tracker.counter == 0
+
+    for _ in range(10):
+        id = uuid.uuid4()
+        client.create_run(
+            "my_run",
+            inputs={},
+            run_type="llm",
+            id=id,
+            trace_id=id,
+            dotted_order=id,
+        )
+
+    if auto_batch_tracing:
+        assert client.tracing_queue
+        client.tracing_queue.join()
+
+        request_calls = [call for call in session.request.mock_calls if call.args and call.args[0] == "POST"]
+        assert len(request_calls) >= 1
+
+        for call in request_calls:
+            assert call.args[0] == "POST"
+            assert call.args[1] == "http://localhost:1984/runs/multipart"
+        get_calls = [call for call in session.request.mock_calls if call.args and call.args[0] == "GET"]
+        # assert len(get_calls) == 1
+        for call in get_calls:
+            assert call.args[1] == f"{api_url}/info"
+    else:
+        request_calls = [call for call in session.request.mock_calls if call.args and call.args[0] == "POST"]
+
+        assert len(request_calls) == 10
+        for call in request_calls:
+            assert call.args[0] == "POST"
+            assert call.args[1] == "http://localhost:1984/runs"
+        if auto_batch_tracing:
+            get_calls = [call for call in session.get.mock_calls if call.args and call.args[0] == "GET"]
+            for call in get_calls:
+                assert call.args[1] == f"{api_url}/info"
+    del client
+    time.sleep(3)  # Give the background thread time to stop
+    gc.collect()  # Force garbage collection
+    assert tracker.counter == 1, "Client was not garbage collected"
+
+
+@pytest.mark.parametrize("auto_batch_tracing", [True, False])
+def test_client_gc_no_batched_runs(auto_batch_tracing: bool) -> None:
+    session = mock.MagicMock(spec=requests.Session)
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        auto_batch_tracing=auto_batch_tracing,
+        session=session,
+    )
+    tracker = CallTracker()
+    weakref.finalize(client, tracker)
+    assert tracker.counter == 0
+
+    # because no trace_id/dotted_order provided, auto batch is disabled
+    for _ in range(10):
+        client.create_run("my_run", inputs={}, run_type="llm", id=uuid.uuid4())
+    request_calls = [call for call in session.request.mock_calls if call.args and call.args[0] == "POST"]
+    assert len(request_calls) == 10
+    for call in request_calls:
+        assert call.args[1] == "http://localhost:1984/runs"
+
+    del client
+    time.sleep(2)  # Give the background thread time to stop
+    gc.collect()  # Force garbage collection
+    assert tracker.counter == 1, "Client was not garbage collected"
+
+
+@pytest.mark.parametrize("auto_batch_tracing", [True, False])
+def test_create_run_with_filters(auto_batch_tracing: bool) -> None:
+    session = mock.MagicMock(spec=requests.Session)
+
+    def filter_inputs(inputs: dict) -> dict:
+        return {"hi there": "woah"}
+
+    def filter_outputs(outputs: dict):
+        return {k: v + "goodbye" for k, v in outputs.items()}
+
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        auto_batch_tracing=auto_batch_tracing,
+        session=session,
+        hide_inputs=filter_inputs,
+        hide_outputs=filter_outputs,
+    )
+    tracker = CallTracker()
+    weakref.finalize(client, tracker)
+    assert tracker.counter == 0
+    expected = ['"hi there":"woah"']
+    for _ in range(3):
+        id_ = uuid.uuid4()
+        client.create_run("my_run", inputs={"foo": "bar"}, run_type="llm", id=id_)
+        output_val = uuid.uuid4().hex[:5]
+        client.update_run(id_, end_time=datetime.now(), outputs={"theoutput": output_val})
+        expected.append(output_val + "goodbye")
+
+    request_calls = [call for call in session.request.mock_calls if call.args and call.args[0] in {"POST", "PATCH"}]
+    all_posted = "\n".join([call.kwargs["data"].decode("utf-8") for call in request_calls])
+    assert all([exp in all_posted for exp in expected])
+
+
+@pytest.mark.parametrize(
+    "hide_metadata_config, expected_metadata_key_present",
+    [
+        (True, False),  # hide_metadata=True should remove metadata
+        (False, True),  # hide_metadata=False should keep metadata
+        (None, True),  # hide_metadata=None should keep metadata
+        (lambda metadata: {**metadata, "modified": True}, True),  # callable modifies
+    ],
+)
+def test_hide_metadata(
+    hide_metadata_config: Optional[Union[Callable[[dict], dict], bool]],
+    expected_metadata_key_present: bool,
+) -> None:
+    """Test the hide_metadata functionality in Client."""
+    session = mock.MagicMock(spec=requests.Session)
+    initial_metadata = {"initial_key": "initial_value"}
+
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        auto_batch_tracing=False,  # Easier to inspect single calls
+        session=session,
+        hide_metadata=hide_metadata_config,
+    )
+
+    run_id = uuid.uuid4()
+    client.create_run(
+        "my_run_metadata_test",
+        inputs={"in": "put"},
+        run_type="llm",
+        id=run_id,
+        extra={"metadata": initial_metadata},
+    )
+
+    post_call = None
+    for call in session.request.mock_calls:
+        if len(call.args) > 1 and call.args[0] == "POST" and "runs" in call.args[1]:
+            post_call = call
+            break
+
+    assert post_call is not None, "POST request to /runs not found"
+
+    payload_data = post_call.kwargs.get("data", b"{}")
+    if isinstance(payload_data, bytes):
+        payload_str = payload_data.decode("utf-8")
+    else:
+        payload_str = str(payload_data)
+
+    try:
+        payload = json.loads(payload_str)
+    except json.JSONDecodeError:
+        if isinstance(payload_data, dict):
+            payload = payload_data
+        else:
+            raise
+
+    payload_extra = payload.get("extra", {})
+
+    if expected_metadata_key_present:
+        assert "metadata" in payload_extra, f"Metadata key should be present in extra {payload_extra}"
+        if callable(hide_metadata_config):
+            # Check if the callable modified the metadata as expected
+            assert payload_extra["metadata"].get("modified") is True
+        else:
+            assert all(
+                k in payload_extra["metadata"] and v == payload_extra["metadata"][k]
+                for k, v in initial_metadata.items()
+            )
+    else:
+        assert all(k not in payload_extra["metadata"] for k in initial_metadata), (
+            f"Metadata key should NOT be present in extra {payload_extra}"
+        )
+
+
+def _error_traceback_with_secret() -> tuple[str, str]:
+    """Return ``(fake_key, traceback_str)`` assembled at runtime so no literal
+    secret-shaped string sits in source (the repo secret-scanner would otherwise
+    rewrite it)."""
+    fake_key = "sk-ant-api03-" + "A" * 30
+    traceback_str = (
+        "Traceback (most recent call last):\n"
+        '  ClientResponseError: 401, request_info=headers={"Authorization": '
+        f'"Bearer {fake_key}"}}'
+    )
+    return fake_key, traceback_str
+
+
+def _find_request_payload(session: mock.MagicMock, method: str, url_substr: str) -> dict:
+    """Return the JSON body of the first mocked request matching method + URL."""
+    for call in session.request.mock_calls:
+        if len(call.args) > 1 and call.args[0] == method and url_substr in call.args[1]:
+            data = call.kwargs.get("data", b"{}")
+            return json.loads(data.decode("utf-8") if isinstance(data, bytes) else data)
+    raise AssertionError(f"{method} request matching {url_substr!r} not found")
+
+
+def _client_with_secret_anonymizer(session: mock.MagicMock) -> Client:
+    return Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        auto_batch_tracing=False,  # Easier to inspect single calls
+        session=session,
+        anonymizer=create_secret_anonymizer(),
+    )
+
+
+def test_anonymizer_redacts_error_field_on_create() -> None:
+    """The anonymizer must scrub ``error`` on the create/post path, not just
+    inputs/outputs.
+
+    A credential can land in the error field via an exception traceback -- e.g.
+    an HTTP-client error whose request-object repr includes an ``Authorization``
+    header -- and it must not be uploaded raw.
+    """
+    fake_key, traceback_str = _error_traceback_with_secret()
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client_with_secret_anonymizer(session)
+
+    client.create_run(
+        "errored_run",
+        inputs={"in": "put"},
+        run_type="llm",
+        id=uuid.uuid4(),
+        error=traceback_str,
+    )
+
+    payload = _find_request_payload(session, "POST", "/runs")
+    assert fake_key not in payload["error"]
+    assert SECRET_PLACEHOLDER in payload["error"]
+
+
+def test_anonymizer_redacts_error_field_on_update() -> None:
+    """The anonymizer must also scrub ``error`` on the update/patch path."""
+    fake_key, traceback_str = _error_traceback_with_secret()
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client_with_secret_anonymizer(session)
+
+    client.update_run(uuid.uuid4(), error=traceback_str)
+
+    payload = _find_request_payload(session, "PATCH", "/runs/")
+    assert fake_key not in payload["error"]
+    assert SECRET_PLACEHOLDER in payload["error"]
+
+
+def test_hide_run_error_passthrough_without_anonymizer() -> None:
+    """With no anonymizer configured, the error is left unchanged."""
+    _, traceback_str = _error_traceback_with_secret()
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        auto_batch_tracing=False,
+        session=mock.MagicMock(spec=requests.Session),
+    )
+    assert client._hide_run_error(traceback_str) == traceback_str
+    assert client._hide_run_error(None) is None
+
+
+def _client(session: mock.MagicMock, **kwargs: Any) -> Client:
+    return Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        auto_batch_tracing=False,  # Easier to inspect single calls
+        session=session,
+        **kwargs,
+    )
+
+
+def _create_run_with_env_metadata(client: Client, metadata: dict) -> None:
+    """Create a run with the runtime env contributing ``LANGCHAIN_REVISION``."""
+    with patch.dict("os.environ", {"LANGCHAIN_REVISION": "abcd2234"}):
+        ls_env.get_langchain_env_var_metadata.cache_clear()
+        try:
+            client.create_run(
+                "my_run",
+                inputs={"in": "put"},
+                run_type="llm",
+                id=uuid.uuid4(),
+                extra={"metadata": metadata},
+            )
+        finally:
+            ls_env.get_langchain_env_var_metadata.cache_clear()
+
+
+def _posted_metadata(session: mock.MagicMock, method: str, url_substr: str) -> dict:
+    payload = _find_request_payload(session, method, url_substr)
+    return payload.get("extra", {}).get("metadata", {})
+
+
+def test_hide_metadata_true_also_hides_runtime_env_metadata() -> None:
+    """Runtime env metadata is merged *after* masking, so it must be re-masked.
+
+    ``LANGCHAIN_*``/``LANGSMITH_*`` env values are copied into metadata verbatim
+    and can carry credentials the user never logged, so ``hide_metadata=True``
+    has to cover them too.
+    """
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client(session, hide_metadata=True)
+
+    _create_run_with_env_metadata(client, {"initial_key": "initial_value"})
+
+    assert _posted_metadata(session, "POST", "/runs") == {}
+
+
+def test_hide_metadata_callable_sees_runtime_env_metadata() -> None:
+    """A ``hide_metadata`` callable gets the env-derived keys too."""
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client(
+        session,
+        hide_metadata=lambda metadata: {k: v for k, v in metadata.items() if not k.startswith("LANGCHAIN_")},
+    )
+
+    _create_run_with_env_metadata(client, {"initial_key": "initial_value"})
+
+    metadata = _posted_metadata(session, "POST", "/runs")
+    assert "LANGCHAIN_REVISION" not in metadata
+    assert metadata["initial_key"] == "initial_value"
+
+
+def test_hide_metadata_callable_applied_once_per_key() -> None:
+    """The env merge must not re-run a callable over already-masked keys.
+
+    ``hide_metadata`` is not required to be idempotent -- hashing, prefixing or
+    otherwise rewriting values is supported -- so applying it twice to the user's
+    own keys corrupts what gets uploaded.
+    """
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client(
+        session,
+        hide_metadata=lambda metadata: {f"masked_{k}": v for k, v in metadata.items()},
+    )
+
+    _create_run_with_env_metadata(client, {"initial_key": "initial_value"})
+
+    metadata = _posted_metadata(session, "POST", "/runs")
+    assert metadata["masked_initial_key"] == "initial_value"
+    assert metadata["masked_LANGCHAIN_REVISION"] == "abcd2234"
+
+
+def test_hide_metadata_true_also_hides_runtime_env_metadata_on_update() -> None:
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client(session, hide_metadata=True)
+
+    with patch.dict("os.environ", {"LANGCHAIN_REVISION": "abcd2234"}):
+        ls_env.get_langchain_env_var_metadata.cache_clear()
+        try:
+            client.update_run(uuid.uuid4(), extra={"metadata": {"initial_key": "initial_value"}})
+        finally:
+            ls_env.get_langchain_env_var_metadata.cache_clear()
+
+    assert _posted_metadata(session, "PATCH", "/runs/") == {}
+
+
+def test_anonymizer_redacts_metadata_on_create() -> None:
+    """``create_secret_anonymizer`` documents metadata coverage; honor it."""
+    fake_key, _ = _error_traceback_with_secret()
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client_with_secret_anonymizer(session)
+
+    client.create_run(
+        "my_run",
+        inputs={"in": "put"},
+        run_type="llm",
+        id=uuid.uuid4(),
+        extra={"metadata": {"config": {"authorization": f"Bearer {fake_key}"}}},
+    )
+
+    metadata = json.dumps(_posted_metadata(session, "POST", "/runs"))
+    assert fake_key not in metadata
+    assert SECRET_PLACEHOLDER in metadata
+
+
+def test_anonymizer_redacts_metadata_on_update() -> None:
+    fake_key, _ = _error_traceback_with_secret()
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client_with_secret_anonymizer(session)
+
+    client.update_run(
+        uuid.uuid4(),
+        extra={"metadata": {"config": {"authorization": f"Bearer {fake_key}"}}},
+    )
+
+    metadata = json.dumps(_posted_metadata(session, "PATCH", "/runs/"))
+    assert fake_key not in metadata
+    assert SECRET_PLACEHOLDER in metadata
+
+
+def test_anonymizer_preserves_ints_larger_than_64_bits() -> None:
+    """The anonymizer pre-pass must not degrade ints that ``dumps_json`` keeps exact.
+
+    ``_hide_run_*`` round-trip the payload through ``_dumps_json`` so the anonymizer
+    receives plain JSON types. Parsing that back with ``orjson.loads`` turns any int
+    outside the 64-bit range into a float, which would undo the exact stdlib
+    fallback in ``dumps_json`` before the anonymizer ever sees the value.
+    """
+    wei = 19_876_543_210_987_654_321
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client_with_secret_anonymizer(session)
+
+    client.create_run(
+        "my_run",
+        inputs={"balance_wei": wei},
+        outputs={"a": 2**64, "b": 2**64 + 1},
+        run_type="llm",
+        id=uuid.uuid4(),
+        extra={"metadata": {"offset": -(2**80)}},
+    )
+
+    payload = _find_request_payload(session, "POST", "/runs")
+    assert payload["inputs"]["balance_wei"] == wei
+    # Floats would collapse these two to the same value.
+    assert payload["outputs"]["a"] != payload["outputs"]["b"]
+    assert _posted_metadata(session, "POST", "/runs")["offset"] == -(2**80)
+
+
+def test_anonymizer_tolerates_non_finite_floats() -> None:
+    """Configuring an anonymizer must not make a payload unserializable.
+
+    A NaN next to an out-of-range int both force the stdlib fallback in
+    ``dumps_json``, which emits the non-standard ``NaN`` literal. ``orjson.loads``
+    rejects that, so the anonymizer pre-pass used to raise ``JSONDecodeError`` and
+    drop the run; stdlib ``json.loads`` accepts it, matching the behavior of the
+    path with no anonymizer configured.
+    """
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client_with_secret_anonymizer(session)
+
+    client.create_run(
+        "my_run",
+        inputs={"x": float("nan"), "v": 2**70},
+        run_type="llm",
+        id=uuid.uuid4(),
+    )
+
+    payload = _find_request_payload(session, "POST", "/runs")
+    assert math.isnan(payload["inputs"]["x"])
+    assert payload["inputs"]["v"] == 2**70
+
+
+def test_omit_traced_runtime_info() -> None:
+    """Test that omit_traced_runtime_info prevents runtime info from being added."""
+    session = mock.MagicMock(spec=requests.Session)
+
+    # Test with omit_traced_runtime_info=True
+    client_omit = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        auto_batch_tracing=False,
+        session=session,
+        omit_traced_runtime_info=True,
+    )
+
+    run_id = uuid.uuid4()
+    client_omit.create_run(
+        "test_run_no_runtime",
+        inputs={"in": "put"},
+        run_type="llm",
+        id=run_id,
+    )
+
+    # Find the POST call
+    post_call = None
+    for call in session.request.mock_calls:
+        if len(call.args) > 1 and call.args[0] == "POST" and "runs" in call.args[1]:
+            post_call = call
+            break
+
+    assert post_call is not None, "POST request to /runs not found"
+
+    payload_data = post_call.kwargs.get("data", b"{}")
+    if isinstance(payload_data, bytes):
+        payload_str = payload_data.decode("utf-8")
+    else:
+        payload_str = str(payload_data)
+
+    try:
+        payload = json.loads(payload_str)
+    except json.JSONDecodeError:
+        if isinstance(payload_data, dict):
+            payload = payload_data
+        else:
+            raise
+
+    payload_extra = payload.get("extra", {})
+
+    # Runtime should not be present or should be empty
+    assert "runtime" not in payload_extra or payload_extra["runtime"] == {}
+
+    # Test with default (omit_traced_runtime_info=False)
+    session2 = mock.MagicMock(spec=requests.Session)
+    client_default = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        auto_batch_tracing=False,
+        session=session2,
+    )
+
+    run_id2 = uuid.uuid4()
+    client_default.create_run(
+        "test_run_with_runtime",
+        inputs={"in": "put"},
+        run_type="llm",
+        id=run_id2,
+    )
+
+    # Find the POST call
+    post_call2 = None
+    for call in session2.request.mock_calls:
+        if len(call.args) > 1 and call.args[0] == "POST" and "runs" in call.args[1]:
+            post_call2 = call
+            break
+
+    assert post_call2 is not None, "POST request to /runs not found"
+
+    payload_data2 = post_call2.kwargs.get("data", b"{}")
+    if isinstance(payload_data2, bytes):
+        payload_str2 = payload_data2.decode("utf-8")
+    else:
+        payload_str2 = str(payload_data2)
+
+    try:
+        payload2 = json.loads(payload_str2)
+    except json.JSONDecodeError:
+        if isinstance(payload_data2, dict):
+            payload2 = payload_data2
+        else:
+            raise
+
+    payload_extra2 = payload2.get("extra", {})
+
+    # Runtime should be present and not empty
+    assert "runtime" in payload_extra2
+    assert payload_extra2["runtime"]  # Should not be empty
+    assert "sdk_version" in payload_extra2["runtime"]
+
+
+@pytest.mark.flaky(retries=3)
+def test_client_gc_after_autoscale(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The 50_000 runs below do not fit the default 10_000-slot tracing queue:
+    # `_put_tracing_queue` uses `put_nowait` and silently drops on `Full`, so
+    # whatever the sender threads cannot keep up with never reaches a POST. That
+    # makes the request-count bounds asserted at the end a measure of how loaded
+    # the machine is rather than of batching, and they fail whenever this test
+    # is co-scheduled with a heavy one. Size the queue to the run count so
+    # nothing is dropped; a slow machine now only makes `join()` slower.
+    monkeypatch.setattr("langsmith.client._TRACING_QUEUE_MAX_SIZE", 100_000)
+    session = mock.MagicMock(spec=requests.Session)
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        session=session,
+        auto_batch_tracing=True,
+    )
+    tracker = CallTracker()
+    weakref.finalize(client, tracker)
+    assert tracker.counter == 0
+
+    tracing_queue = client.tracing_queue
+    assert tracing_queue is not None
+
+    for _ in range(50_000):
+        id = uuid.uuid4()
+        client.create_run(
+            "my_run",
+            inputs={},
+            run_type="llm",
+            id=id,
+            trace_id=id,
+            dotted_order=id,
+        )
+
+    del client
+    tracing_queue.join()
+    time.sleep(2)  # Give the background threads time to stop
+    gc.collect()  # Force garbage collection
+    assert tracker.counter == 1, "Client was not garbage collected"
+
+    request_calls = [call for call in session.request.mock_calls if call.args and call.args[0] == "POST"]
+    assert len(request_calls) >= 400 and len(request_calls) <= 1000
+    for call in request_calls:
+        assert call.args[0] == "POST"
+        assert call.args[1] == "http://localhost:1984/runs/multipart"
+
+
+@pytest.mark.parametrize("supports_batch_endpoint", [True, False])
+@pytest.mark.parametrize("auto_batch_tracing", [True, False])
+def test_create_run_includes_langchain_env_var_metadata(
+    supports_batch_endpoint: bool,
+    auto_batch_tracing: bool,
+) -> None:
+    session = mock.Mock()
+    session.request = mock.Mock()
+    api_url = "http://localhost:1984"
+
+    def mock_get(*args, **kwargs):
+        if args[0] == f"{api_url}/info":
+            response = mock.Mock()
+            if supports_batch_endpoint:
+                response.json.return_value = {}
+            else:
+                response.raise_for_status.side_effect = HTTPError()
+                response.status_code = 404
+            return response
+        else:
+            return MagicMock()
+
+    session.get.side_effect = mock_get
+    client = Client(
+        api_url=api_url,
+        api_key="123",
+        auto_batch_tracing=auto_batch_tracing,
+        session=session,
+    )
+    inputs = {
+        "foo": "これは私の友達です",
+        "bar": "این یک کتاب است",
+        "baz": "😊🌺🎉💻🚀🌈🍕🏄‍♂️🎁🐶🌟🏖️👍🚲🎈",
+        "qux": "나는\u3000밥을\u3000먹었습니다.",
+        "는\u3000밥": "나는\u3000밥을\u3000먹었습니다.",
+    }
+
+    # Set the environment variables just for this test
+    with patch.dict("os.environ", {"LANGCHAIN_REVISION": "abcd2234"}):
+        # Clear the cache to ensure the environment variables are re-read
+        ls_env.get_langchain_env_var_metadata.cache_clear()
+        id_ = uuid.uuid4()
+        start_time = datetime.now()
+        client.create_run(
+            "my_run",
+            inputs=inputs,
+            run_type="llm",
+            id=id_,
+            trace_id=id_,
+            dotted_order=f"{start_time.strftime('%Y%m%dT%H%M%S%fZ')}{id_}",
+            start_time=start_time,
+        )
+        if tracing_queue := client.tracing_queue:
+            tracing_queue.join()
+        # Check the posted value in the request
+        posted_value = parse_request_data(session.request.call_args[1]["data"])
+        if auto_batch_tracing:
+            assert posted_value["post"][0]["extra"]["metadata"]["LANGCHAIN_REVISION"] == "abcd2234"
+        else:
+            assert posted_value["extra"]["metadata"]["LANGCHAIN_REVISION"] == "abcd2234"
+            assert "LANGCHAIN_API_KEY" not in posted_value["extra"]["metadata"]
+
+
+@pytest.mark.parametrize("source_type", ["api", "model"])
+def test_create_feedback_string_source_type(source_type: str) -> None:
+    session = mock.Mock()
+    client = Client(api_url="http://localhost:1984", api_key="123", session=session)
+    request_object = mock.Mock()
+    request_object.json.return_value = {
+        "id": uuid.uuid4(),
+        "key": "Foo",
+        "created_at": _CREATED_AT,
+        "modified_at": _CREATED_AT,
+        "run_id": uuid.uuid4(),
+    }
+    session.post.return_value = request_object
+    id_ = uuid.uuid4()
+    client.create_feedback(
+        id_,
+        key="Foo",
+        feedback_source_type=source_type,
+    )
+
+
+def test_create_feedback_can_opt_out_of_extending_trace_retention() -> None:
+    session = mock.Mock()
+    client = Client(api_url="http://localhost:1984", api_key="123", session=session)
+    request_object = mock.Mock()
+    run_id = uuid.uuid4()
+    request_object.json.return_value = {
+        "id": uuid.uuid4(),
+        "key": "Foo",
+        "created_at": _CREATED_AT,
+        "modified_at": _CREATED_AT,
+        "run_id": run_id,
+    }
+    session.request.return_value = request_object
+
+    client.create_feedback(
+        run_id,
+        key="Foo",
+        extend_trace_retention=False,
+    )
+
+    payload = json.loads(session.request.call_args.kwargs["data"])
+    assert payload["extend_trace_retention"] is False
+
+
+def test_create_feedback_opt_out_uses_direct_post_when_batching_available() -> None:
+    """Opt-out must POST /feedback so extend_trace_retention reaches the API.
+
+    The tracing-queue multipart path is not safe for opt-out on all backends
+    (e.g. Go multipart ingest ignores retention flags).
+    """
+    session = mock.Mock()
+    run_id = uuid.uuid4()
+    trace_id = uuid.uuid4()
+    info = ls_schemas.LangSmithInfo(
+        version="0.8.11",
+        batch_ingest_config=ls_schemas.BatchIngestConfig(
+            use_multipart_endpoint=True,
+            size_limit=100,
+            scale_up_nthreads_limit=4,
+            scale_up_qsize_trigger=3,
+            scale_down_nempty_trigger=1,
+        ),
+    )
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        session=session,
+        auto_batch_tracing=True,
+        info=info,
+    )
+    assert client.tracing_queue is not None
+
+    client.create_feedback(
+        run_id,
+        key="Foo",
+        trace_id=trace_id,
+        extend_trace_retention=False,
+    )
+
+    session.request.assert_called_once()
+    payload = json.loads(session.request.call_args.kwargs["data"])
+    assert payload["extend_trace_retention"] is False
+    assert client.tracing_queue.qsize() == 0
+
+
+def _feedback_client(session: mock.Mock, **flags: bool) -> Client:
+    return Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        session=session,
+        info=ls_schemas.LangSmithInfo(version="0.8.11", instance_flags=flags),
+    )
+
+
+def test_create_feedback_requires_session_id_when_ch_query_disabled() -> None:
+    """SmithDB-only backends cannot locate the run without session_id."""
+    session = mock.Mock()
+    client = _feedback_client(session, ch_query_enabled=False, sdb_query_enabled=True)
+
+    with pytest.raises(ValueError, match="session_id must be provided"):
+        client.create_feedback(uuid.uuid4(), key="Foo")
+
+    session.request.assert_not_called()
+
+    # start_time stays optional, matching the server.
+    client.create_feedback(uuid.uuid4(), key="Foo", session_id=uuid.uuid4())
+    session.request.assert_called_once()
+
+    # Session-level feedback has no run to locate.
+    client.create_feedback(None, key="Foo", project_id=uuid.uuid4())
+
+
+def test_create_feedback_warns_without_session_id() -> None:
+    """Backends that can still look the run up get a deprecation warning."""
+    session = mock.Mock()
+    client = _feedback_client(session, ch_query_enabled=True)
+
+    with pytest.warns(ls_utils.LangSmithWarning, match="smithdb-sdk-migration"):
+        client.create_feedback(uuid.uuid4(), key="Foo")
+    session.request.assert_called_once()
+
+
+def test_pydantic_serialize() -> None:
+    """Test that pydantic objects can be serialized."""
+    test_uuid = uuid.uuid4()
+    test_time = datetime.now()
+
+    class ChildPydantic(BaseModel):
+        uid: uuid.UUID
+        child_path_keys: Dict[pathlib.Path, pathlib.Path]
+
+    class MyPydantic(BaseModel):
+        foo: str
+        uid: uuid.UUID
+        tim: datetime
+        ex: Optional[str] = None
+        child: Optional[ChildPydantic] = None
+        path_keys: Dict[pathlib.Path, pathlib.Path]
+
+    obj = MyPydantic(
+        foo="bar",
+        uid=test_uuid,
+        tim=test_time,
+        child=ChildPydantic(uid=test_uuid, child_path_keys={pathlib.Path("foo"): pathlib.Path("bar")}),
+        path_keys={pathlib.Path("foo"): pathlib.Path("bar")},
+    )
+    res = json.loads(json.dumps(obj, default=_serialize_json))
+    expected = {
+        "foo": "bar",
+        "uid": str(test_uuid),
+        "tim": test_time.isoformat(),
+        "child": {
+            "uid": str(test_uuid),
+            "child_path_keys": {"foo": "bar"},
+        },
+        "path_keys": {"foo": "bar"},
+    }
+    assert res == expected
+
+    obj2 = {"output": obj}
+    res2 = json.loads(json.dumps(obj2, default=_serialize_json))
+    assert res2 == {"output": expected}
+
+
+def test_serialize_json(caplog) -> None:
+    caplog.set_level(logging.ERROR)
+
+    class MyClass:
+        def __init__(self, x: int) -> None:
+            self.x = x
+            self.y = "y"
+            self.a_list = [1, 2, 3]
+            self.a_tuple = (1, 2, 3)
+            self.a_set = {1, 2, 3}
+            self.a_dict = {"foo": "bar"}
+            self.my_bytes = b"foo"
+
+        def __repr__(self) -> str:
+            return "I fell back"
+
+        def __hash__(self) -> int:
+            return 1
+
+    class ClassWithTee:
+        def __init__(self) -> None:
+            tee_a, tee_b = itertools.tee(range(10))
+            self.tee_a = tee_a
+            self.tee_b = tee_b
+
+        def __repr__(self):
+            return "tee_a, tee_b"
+
+    class MyPydantic(BaseModel):
+        foo: str
+        bar: int
+        path_keys: Dict[pathlib.Path, "MyPydantic"]
+
+    @dataclasses.dataclass
+    class MyDataclass:
+        foo: str
+        bar: int
+
+        def something(self) -> None:
+            pass
+
+    class MyEnum(str, Enum):
+        FOO = "foo"
+        BAR = "bar"
+
+    class ClassWithFakeDict:
+        def dict(self) -> Dict:
+            raise ValueError("This should not be called")
+
+        def to_dict(self) -> Dict:
+            return {"foo": "bar"}
+
+    @dataclasses_json.dataclass_json
+    @dataclasses.dataclass
+    class Person:
+        name: str
+
+    uid = uuid.uuid4()
+    current_time = datetime.now()
+
+    class MyNamedTuple(NamedTuple):
+        foo: str
+        bar: int
+
+    to_serialize = {
+        "uid": uid,
+        "time": current_time,
+        "my_class": MyClass(1),
+        "class_with_tee": ClassWithTee(),
+        "my_dataclass": MyDataclass("foo", 1),
+        "my_enum": MyEnum.FOO,
+        "my_pydantic": MyPydantic(
+            foo="foo",
+            bar=1,
+            path_keys={pathlib.Path("foo"): MyPydantic(foo="foo", bar=1, path_keys={})},
+        ),
+        "my_pydantic_class": MyPydantic,
+        "person": Person(name="foo_person"),
+        "a_bool": True,
+        "a_none": None,
+        "a_str": "foo",
+        "an_int": 1,
+        "a_float": 1.1,
+        "named_tuple": MyNamedTuple(foo="foo", bar=1),
+        "fake_json": ClassWithFakeDict(),
+        "some_set": set("a"),
+        "set_with_class": set([MyClass(1)]),
+        "my_mock": MagicMock(text="Hello, world"),
+    }
+    res = _orjson.loads(_dumps_json(to_serialize))
+    assert "model_dump" not in caplog.text, f"Unexpected error logs were emitted: {caplog.text}"
+
+    expected = {
+        "uid": str(uid),
+        "time": current_time.isoformat(),
+        "my_class": "I fell back",
+        "class_with_tee": "tee_a, tee_b",
+        "my_dataclass": {"foo": "foo", "bar": 1},
+        "my_enum": "foo",
+        "my_pydantic": {
+            "foo": "foo",
+            "bar": 1,
+            "path_keys": {"foo": {"foo": "foo", "bar": 1, "path_keys": {}}},
+        },
+        "my_pydantic_class": lambda x: "MyPydantic" in x,
+        "person": {"name": "foo_person"},
+        "a_bool": True,
+        "a_none": None,
+        "a_str": "foo",
+        "an_int": 1,
+        "a_float": 1.1,
+        "named_tuple": {"bar": 1, "foo": "foo"},
+        "fake_json": {"foo": "bar"},
+        "some_set": ["a"],
+        "set_with_class": ["I fell back"],
+        "my_mock": lambda x: "Mock" in x,
+    }
+    assert set(expected) == set(res)
+    for k, v in expected.items():
+        try:
+            if callable(v):
+                assert v(res[k]), f"Failed for {k}"
+            else:
+                assert res[k] == v, f"Failed for {k}"
+        except AssertionError:
+            raise
+
+    @dataclasses.dataclass
+    class CyclicClass:
+        other: Optional["CyclicClass"]
+
+        def __repr__(self) -> str:
+            return "my_cycles..."
+
+    my_cyclic = CyclicClass(other=CyclicClass(other=None))
+    my_cyclic.other.other = my_cyclic  # type: ignore
+
+    res = _orjson.loads(_dumps_json({"cyclic": my_cyclic}))
+    assert res == {"cyclic": "my_cycles..."}
+    expected = {"foo": "foo", "bar": 1}
+
+
+def test__dumps_json():
+    chars = "".join(chr(cp) for cp in range(0, sys.maxunicode + 1))
+    trans_table = str.maketrans("", "", "")
+    all_chars = chars.translate(trans_table)
+    serialized_json = _dumps_json({"chars": all_chars})
+    assert isinstance(serialized_json, bytes)
+    serialized_str = serialized_json.decode("utf-8")
+    assert '"chars"' in serialized_str
+    assert "\\uD800" not in serialized_str
+    assert "\\uDC00" not in serialized_str
+
+
+def test__dumps_json_preserves_ints_larger_than_64_bits():
+    """Integers >= 2**64 must survive the stdlib-json fallback path exactly.
+
+    orjson can't serialize them (TypeError -> stdlib fallback), and orjson.loads
+    parses them as floats, so the fallback's surrogate-detection round-trip must
+    be skipped when no surrogates are present or distinct values collapse to the
+    same float (e.g. 2**64 and 2**64 + 1 both become 1.8446744073709552e+19).
+    """
+    for value in (2**64, 2**64 + 1, 19_876_543_210_987_654_321, -(2**80)):
+        serialized = _dumps_json({"v": value})
+        deserialized = json.loads(serialized)["v"]
+        assert isinstance(deserialized, int)
+        assert deserialized == value
+    assert _dumps_json({"v": 2**64}) != _dumps_json({"v": 2**64 + 1})
+
+    # Non-BMP characters are escaped as valid surrogate pairs by ensure_ascii,
+    # which must not re-trigger the lossy re-encode alongside a big int.
+    serialized = _dumps_json({"emoji": "\U0001f600", "v": 2**70})
+    deserialized = json.loads(serialized)
+    assert deserialized["emoji"] == "\U0001f600"
+    assert deserialized["v"] == 2**70
+
+
+def test__dumps_json_normalizes_unsupported_dict_keys():
+    class TupleKeyedDict:
+        def to_dict(self) -> Dict:
+            return {(1, 2): "custom"}
+
+    serialized_json = _dumps_json(
+        {
+            (1, 2): "value",
+            pathlib.Path("path-key"): "path",
+            frozenset({1}): "frozen",
+            "nested": [{("a", "b"): pathlib.Path("c")}],
+            "custom": TupleKeyedDict(),
+        }
+    )
+
+    assert isinstance(serialized_json, bytes)
+    assert _orjson.loads(serialized_json) == {
+        "(1, 2)": "value",
+        "path-key": "path",
+        "[1]": "frozen",
+        "nested": [{"('a', 'b')": "c"}],
+        "custom": {"(1, 2)": "custom"},
+    }
+
+
+def test__dumps_json_coerces_json_native_dict_keys():
+    """Keys orjson can coerce must still round-trip to their string form.
+
+    The fast path omits ``OPT_NON_STR_KEYS``, so these are coerced by the
+    retry with the full options rather than on the first attempt. The output
+    must not change either way.
+    """
+    serialized_json = _dumps_json({1: "int", 2.5: "float", None: "none", date(2020, 1, 2): "date"})
+
+    assert _orjson.loads(serialized_json) == {
+        "1": "int",
+        "2.5": "float",
+        "null": "none",
+        "2020-01-02": "date",
+    }
+    # `True` is kept apart: it would collide with the `1` key above (True == 1).
+    assert _orjson.loads(_dumps_json({True: "bool"})) == {"true": "bool"}
+
+
+def test__dumps_json_coerces_enum_dict_keys_by_value():
+    """Enum keys must serialize as their value, not ``str(member)``.
+
+    orjson does this coercion itself, but only with ``OPT_NON_STR_KEYS``; the
+    normalizing fallback would emit ``"StrValued.FOO"`` instead.
+    """
+
+    class StrValued(Enum):
+        FOO = "foo"
+
+    class IntValued(Enum):
+        BAR = 3
+
+    class BytesValued(Enum):
+        BAZ = b"x"
+
+    assert _orjson.loads(_dumps_json({StrValued.FOO: 1})) == {"foo": 1}
+    assert _orjson.loads(_dumps_json({IntValued.BAR: 1})) == {"3": 1}
+    # A value orjson can't use as a key falls back to the member name.
+    assert _orjson.loads(_dumps_json({BytesValued.BAZ: 1})) == {"BytesValued.BAZ": 1}
+
+
+def test__dumps_json_honors_json_only_field_serializer():
+    """A field redacted for JSON must stay redacted, including when nested.
+
+    Serializing Pydantic models in python mode would bypass
+    ``when_used="json"`` serializers and emit the raw value.
+    """
+
+    class Redacted(BaseModel):
+        token: str
+
+        @field_serializer("token", when_used="json")
+        def _redact(self, _value: str) -> str:
+            return "REDACTED"
+
+    class Holder(BaseModel):
+        payload: Any = None
+
+    secret = Redacted(token="actual-secret")
+
+    for obj in (secret, Holder(payload=secret), {"k": secret}, [secret]):
+        assert b"actual-secret" not in _dumps_json(obj)
+
+
+def test__dumps_json_honors_model_dump_override():
+    """A model overriding model_dump keeps control of its serialization."""
+
+    class Overridden(BaseModel):
+        value: str
+
+        def model_dump(self, **kwargs: Any) -> Dict:
+            return {"overridden": True}
+
+    assert _orjson.loads(_dumps_json(Overridden(value="x"))) == {"overridden": True}
+
+
+def test__dumps_json_does_not_swallow_keyboard_interrupt():
+    """Serialization must not swallow KeyboardInterrupt/SystemExit.
+
+    The serde error handlers catch ``Exception`` (not ``BaseException``), so a
+    system-exiting signal raised while serializing an object propagates instead
+    of being masked as ``str(obj)``.
+    """
+
+    class _RaisesInterrupt:
+        def model_dump(self, **kwargs):
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _dumps_json({"x": _RaisesInterrupt()})
+
+
+def test__dumps_json_type_object_serializes_as_str():
+    # A class object has no useful instance serialization method; it must fall
+    # through to _simple_default -> str rather than be probed like an instance.
+    # The probe attribute has to live at the class level (via a metaclass) for
+    # this to distinguish the guarded and unguarded implementations.
+    class Meta(type):
+        def to_dict(cls):
+            return {"meta": "yes"}
+
+    class WithClassLevelToDict(metaclass=Meta):
+        pass
+
+    # Guarded: falls through to _simple_default -> str.
+    # Unguarded: probed like an instance, emits {"meta": "yes"}.
+    assert isinstance(_orjson.loads(_dumps_json({"cls": WithClassLevelToDict}))["cls"], str)
+
+
+@patch("langsmith.client.requests.Session", autospec=True)
+def test_host_url(_: MagicMock) -> None:
+    client = Client(api_url="https://api.foobar.com/api", api_key="API_KEY")
+    assert client._host_url == "https://api.foobar.com"
+
+    client = Client(
+        api_url="https://api.langsmith.com",
+        api_key="API_KEY",
+        web_url="https://web.langsmith.com",
+    )
+    assert client._host_url == "https://web.langsmith.com"
+
+    client = Client(api_url="http://localhost:8000", api_key="API_KEY")
+    assert client._host_url == "http://localhost"
+
+    client = Client(api_url="https://eu.api.smith.langchain.com", api_key="API_KEY")
+    assert client._host_url == "https://eu.smith.langchain.com"
+
+    client = Client(api_url="https://apac.api.smith.langchain.com", api_key="API_KEY")
+    assert client._host_url == "https://apac.smith.langchain.com"
+
+    client = Client(api_url="https://dev.api.smith.langchain.com", api_key="API_KEY")
+    assert client._host_url == "https://dev.smith.langchain.com"
+
+    client = Client(api_url="https://api.smith.langchain.com", api_key="API_KEY")
+    assert client._host_url == "https://smith.langchain.com"
+
+
+@patch("langsmith.client.time.sleep")
+def test_retry_on_connection_error(mock_sleep: MagicMock):
+    mock_session = MagicMock()
+    client = Client(api_key="test", session=mock_session, auto_batch_tracing=False)
+    mock_session.request.side_effect = requests.ConnectionError()
+
+    with pytest.raises(ls_utils.LangSmithConnectionError):
+        client.request_with_retries("GET", "https://test.url", stop_after_attempt=2)
+    assert mock_session.request.call_count == 2
+
+
+@patch("langsmith.client.time.sleep")
+def test_http_status_500_handling(mock_sleep):
+    mock_session = MagicMock()
+    client = Client(api_key="test", session=mock_session, auto_batch_tracing=False)
+    mock_response = MagicMock()
+    mock_response.status_code = 500
+    mock_response.raise_for_status.side_effect = HTTPError()
+    mock_session.request.return_value = mock_response
+
+    with pytest.raises(ls_utils.LangSmithAPIError):
+        client.request_with_retries("GET", "https://test.url", stop_after_attempt=2)
+    assert mock_session.request.call_count == 2
+
+
+@patch("langsmith.client.time.sleep")
+def test_pass_on_409_handling(mock_sleep):
+    mock_session = MagicMock()
+    client = Client(api_key="test", session=mock_session, auto_batch_tracing=False)
+    mock_response = MagicMock()
+    mock_response.status_code = 409
+    mock_response.raise_for_status.side_effect = HTTPError()
+    mock_session.request.return_value = mock_response
+    response = client.request_with_retries(
+        "GET",
+        "https://test.url",
+        stop_after_attempt=5,
+        to_ignore=[ls_utils.LangSmithConflictError],
+    )
+    assert mock_session.request.call_count == 1
+    assert response == mock_response
+
+
+@patch("langsmith.client.ls_utils.raise_for_status_with_text")
+def test_http_status_429_handling(mock_raise_for_status):
+    mock_session = MagicMock()
+    client = Client(api_key="test", session=mock_session)
+    mock_response = MagicMock()
+    mock_response.status_code = 429
+    mock_session.request.return_value = mock_response
+    mock_raise_for_status.side_effect = HTTPError()
+    with pytest.raises(ls_utils.LangSmithRateLimitError):
+        client.request_with_retries("GET", "https://test.url")
+
+
+@patch("langsmith.client.ls_utils.raise_for_status_with_text")
+def test_http_status_401_handling(mock_raise_for_status):
+    mock_session = MagicMock()
+    client = Client(api_key="test", session=mock_session)
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_session.request.return_value = mock_response
+    mock_raise_for_status.side_effect = HTTPError()
+    with pytest.raises(ls_utils.LangSmithAuthError):
+        client.request_with_retries("GET", "https://test.url")
+
+
+@patch("langsmith.client.ls_utils.raise_for_status_with_text")
+def test_http_status_404_handling(mock_raise_for_status):
+    mock_session = MagicMock()
+    client = Client(api_key="test", session=mock_session)
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_session.request.return_value = mock_response
+    mock_raise_for_status.side_effect = HTTPError()
+    with pytest.raises(ls_utils.LangSmithNotFoundError):
+        client.request_with_retries("GET", "https://test.url")
+
+
+@patch("langsmith.client.ls_utils.raise_for_status_with_text")
+def test_batch_ingest_run_retry_on_429(mock_raise_for_status):
+    mock_session = MagicMock()
+    client = Client(api_key="test", session=mock_session)
+    mock_response = MagicMock()
+    mock_response.headers = {"retry-after": "0.5"}
+    mock_response.status_code = 429
+    mock_session.request.return_value = mock_response
+    mock_raise_for_status.side_effect = HTTPError()
+
+    client.batch_ingest_runs(
+        create=[
+            {
+                "name": "test",
+                "id": str(uuid.uuid4()),
+                "trace_id": str(uuid.uuid4()),
+                "dotted_order": str(uuid.uuid4()),
+            }
+        ],
+    )
+    # Check that there were 3 post calls (may be other get calls though)
+    assert mock_session.request.call_count >= 3
+    # count the number of POST requests
+    assert sum([1 for call in mock_session.request.call_args_list if call[0][0] == "POST"]) == 3
+
+
+MB = 1024 * 1024
+
+
+@pytest.mark.parametrize("payload_size", [MB, 5 * MB, 9 * MB, 21 * MB])
+@pytest.mark.parametrize("use_multipart_endpoint", (True, False))
+def test_batch_ingest_run_splits_large_batches(payload_size: int, use_multipart_endpoint: bool):
+    mock_session = MagicMock()
+    client = Client(api_key="test", session=mock_session)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+    # Create 6 run ops total, each with an inputs dictionary that's payload_size bytess
+    run_ids = [str(uuid.uuid4()) for _ in range(3)]
+    patch_ids = [str(uuid.uuid4()) for _ in range(3)]
+    posts = [
+        {
+            "name": "test",
+            "id": run_id,
+            "trace_id": run_id,
+            "dotted_order": run_id,
+            "inputs": {"x": "a" * payload_size},
+            "start_time": "2021-01-01T00:00:00Z",
+        }
+        for run_id in run_ids
+    ]
+    patches = [
+        {
+            "id": run_id,
+            "trace_id": run_id,
+            "dotted_order": run_id,
+            "end_time": "2021-01-01T00:00:00Z",
+            "outputs": {"y": "b" * payload_size},
+        }
+        for run_id in patch_ids
+    ]
+
+    if use_multipart_endpoint:
+        client.multipart_ingest(create=posts, update=patches)
+        # multipart endpoint should only send one request
+        expected_num_requests = 1
+        # count the number of POST requests
+        assert sum([1 for call in mock_session.request.call_args_list if call[0][0] == "POST"]) in (
+            expected_num_requests,
+            expected_num_requests + 1,
+        )
+
+        request_bodies = [
+            op
+            for call in mock_session.request.call_args_list
+            for op in (
+                MultipartParser(
+                    (io.BytesIO(call[1]["data"]) if isinstance(call[1]["data"], bytes) else call[1]["data"]),
+                    parse_options_header(call[1]["headers"]["Content-Type"])[1]["boundary"],
+                )
+                if call[0][0] == "POST"
+                else []
+            )
+        ]
+        all_run_ids = run_ids + patch_ids
+
+        # Check that all the run_ids are present in the request bodies
+        for run_id in all_run_ids:
+            assert any([body.name.split(".")[1] == run_id for body in request_bodies]), run_id
+    else:
+        client.batch_ingest_runs(create=posts, update=patches)
+        # we can support up to 20MB per batch, so we need to find the number of batches
+        # we should be sending
+        max_in_batch = max(1, (20 * MB) // (payload_size + 20))
+
+        expected_num_requests = min(6, math.ceil((len(run_ids) * 2) / max_in_batch))
+        # count the number of POST requests
+        assert sum([1 for call in mock_session.request.call_args_list if call[0][0] == "POST"]) == expected_num_requests
+        request_bodies = [
+            op
+            for call in mock_session.request.call_args_list
+            for reqs in (_orjson.loads(call[1]["data"]).values() if call[0][0] == "POST" else [])
+            for op in reqs
+        ]
+        all_run_ids = run_ids + patch_ids
+
+        # Check that all the run_ids are present in the request bodies
+        for run_id in all_run_ids:
+            assert any([body["id"] == str(run_id) for body in request_bodies])
+
+        # Check that no duplicate run_ids are present in the request bodies
+        assert len(request_bodies) == len(set([body["id"] for body in request_bodies]))
+
+
+# Buckets under XXH3-128 % 1_000_000: 10679 and 982794, so these stay on
+# opposite sides of the threshold for any rate between 0.02 and 0.98.
+SAMPLED_RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000015")
+FILTERED_RUN_ID = uuid.UUID("00000000-0000-0000-0000-000000000004")
+
+
+def _sampling_run(run_id: uuid.UUID, trace_id: Optional[uuid.UUID] = None) -> dict:
+    return {
+        "id": run_id,
+        "trace_id": trace_id or run_id,
+        "name": f"run-{run_id}",
+        "run_type": "llm",
+        "inputs": {"text": str(run_id)},
+        "dotted_order": f"20210101T000000000000Z{trace_id or run_id}",
+        "start_time": "2021-01-01T00:00:00Z",
+    }
+
+
+def test_sampling_and_batching():
+    """Test that sampling and batching filter runs by stable run ID."""
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+
+    client = Client(
+        api_key="test-api-key",
+        auto_batch_tracing=True,
+        tracing_sampling_rate=0.5,
+        session=mock_session,
+    )
+
+    client.create_run(**_sampling_run(SAMPLED_RUN_ID, trace_id=SAMPLED_RUN_ID))
+    client.create_run(**_sampling_run(FILTERED_RUN_ID, trace_id=FILTERED_RUN_ID))
+    client.flush()
+
+    post_calls = [
+        call
+        for call in mock_session.request.mock_calls
+        if call.args and call.args[0] == "POST" and call.args[1].endswith("/runs/multipart")
+    ]
+    assert len(post_calls) == 1
+    data = post_calls[0].kwargs["data"]
+    if isinstance(data, bytes):
+        data = data.decode("utf-8")
+    batch_data = parse_request_data(data)
+    assert [post["id"] for post in batch_data.get("post", [])] == [str(SAMPLED_RUN_ID)]
+
+
+def test_sample_rate_is_reported_on_created_runs() -> None:
+    """The configured rate has to ride out on the run, not just gate it.
+
+    Without it the sampled subset cannot be scaled back up to the customer's
+    total trace potential, and nothing anywhere reports the omission.
+    """
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client(session, tracing_sampling_rate=0.5)
+
+    client.create_run(
+        "sampled_run",
+        inputs={"in": "put"},
+        run_type="llm",
+        id=SAMPLED_RUN_ID,
+    )
+
+    payload = _find_request_payload(session, "POST", "/runs")
+    metadata = (payload.get("extra") or {}).get("metadata") or {}
+    assert metadata["ls_tracing_sample_rate"] == 0.5
+
+
+def test_sample_rate_overrides_an_inherited_value() -> None:
+    """The client's own rate wins over one already on the run.
+
+    ``RunTree.create_child`` copies the parent's metadata onto every child, so a
+    run traced by a client at one rate can arrive carrying another's -- and a
+    caller can set the key directly. Either way the reported rate has to be the
+    rate this client actually sampled at, or the extrapolation is wrong rather
+    than merely missing.
+    """
+    session = mock.MagicMock(spec=requests.Session)
+    client = _client(session, tracing_sampling_rate=0.5)
+
+    client.create_run(
+        "sampled_run",
+        inputs={"in": "put"},
+        run_type="llm",
+        id=SAMPLED_RUN_ID,
+        extra={"metadata": {"ls_tracing_sample_rate": 0.9, "user": "x"}},
+    )
+
+    payload = _find_request_payload(session, "POST", "/runs")
+    metadata = payload["extra"]["metadata"]
+    assert metadata["ls_tracing_sample_rate"] == 0.5
+    assert metadata["user"] == "x"
+
+
+def test_sample_rate_survives_multipart_batching() -> None:
+    """The rate must ride out through the multipart batch path too.
+
+    ``test_sample_rate_is_reported_on_created_runs`` covers the single-run POST
+    path (``auto_batch_tracing=False``). This covers the other one: runs queued
+    through the auto-batcher and flushed to ``/runs/multipart`` as separate
+    multipart parts must carry the rate on each posted run, not just on the
+    dict handed to ``create_run``.
+    """
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+
+    client = Client(
+        api_key="test-api-key",
+        auto_batch_tracing=True,
+        tracing_sampling_rate=1.0,
+        session=mock_session,
+    )
+
+    run_ids = [uuid.uuid4() for _ in range(2)]
+    for run_id in run_ids:
+        client.create_run(
+            **_sampling_run(run_id),
+            extra={"metadata": {"user_id": f"user-{run_id}"}},
+        )
+    client.flush()
+
+    post_calls = [
+        call
+        for call in mock_session.request.mock_calls
+        if call.args and call.args[0] == "POST" and call.args[1].endswith("/runs/multipart")
+    ]
+    assert len(post_calls) == 1
+    data = post_calls[0].kwargs["data"]
+    if isinstance(data, bytes):
+        data = data.decode("utf-8")
+    batch_data = parse_request_data(data)
+    posted = batch_data.get("post", [])
+    assert {post["id"] for post in posted} == {str(run_id) for run_id in run_ids}
+    for post in posted:
+        metadata = post["extra"]["metadata"]
+        assert metadata["ls_tracing_sample_rate"] == 1.0
+        assert metadata["user_id"] == f"user-{post['id']}"
+
+
+# Golden decisions at rate 0.5. The JS SDK asserts this exact table in
+# js/src/tests/client.test.ts: both must agree, or a trace sampled in by one
+# SDK is dropped by the other. Regenerate both sides together, never one.
+CROSS_SDK_SAMPLING_AT_HALF = [
+    ("00000000-0000-0000-0000-000000000001", False),
+    ("00000000-0000-0000-0000-000000000004", False),
+    ("00000000-0000-0000-0000-000000000015", True),
+    ("0198f8a0-1234-7000-8000-000000000042", False),
+    ("b3d2c1a0-5f6e-7d8c-9b0a-1e2f3d4c5b6a", False),
+    ("abc", True),
+    ("", False),
+    ("trace-1", True),
+    ("trace-2", False),
+    # Non-ASCII pins the UTF-8 encoding: a UTF-16 implementation diverges here.
+    ("\u00fcn\u00efc\u00f8d\u00e9-trace", False),
+    ("\u65e5\u672c\u8a9e", False),
+    # Case folding happens before hashing.
+    ("MiXeD-CaSe-ID", True),
+]
+
+
+@pytest.mark.parametrize(("identifier", "expected"), CROSS_SDK_SAMPLING_AT_HALF)
+def test_sampling_matches_js_sdk(identifier: str, expected: bool):
+    assert is_sampled_by_id(identifier, 0.5) is expected
+
+
+def test_sampling_rate_bounds_skip_hashing():
+    # None/>=1 keep everything, <=0 drops everything, whatever the identifier.
+    for identifier in ("anything", "", None):
+        assert is_sampled_by_id(identifier, None) is True
+        assert is_sampled_by_id(identifier, 1.0) is True
+        assert is_sampled_by_id(identifier, 0.0) is False
+
+
+def test_sampling_rate_is_roughly_honoured():
+    ids = [str(uuid.uuid4()) for _ in range(20_000)]
+    for rate in (0.1, 0.25, 0.75):
+        kept = sum(is_sampled_by_id(i, rate) for i in ids) / len(ids)
+        assert abs(kept - rate) < 0.02, f"rate {rate} kept {kept}"
+
+
+def test_run_sampling_is_consistent_for_create_and_update():
+    client = Client(api_key="test-api-key", tracing_sampling_rate=0.5)
+
+    sampled_create = _sampling_run(SAMPLED_RUN_ID)
+    filtered_create = _sampling_run(FILTERED_RUN_ID)
+    sampled_update = {**sampled_create, "outputs": {"result": "sampled"}}
+    filtered_update = {**filtered_create, "outputs": {"result": "filtered"}}
+
+    assert client._filter_for_sampling([sampled_create, filtered_create]) == [sampled_create]
+    assert client._filter_for_sampling([sampled_update, filtered_update]) == [sampled_update]
+    assert client._should_sample(SAMPLED_RUN_ID)
+    assert not client._should_sample(FILTERED_RUN_ID)
+
+
+def test_sampling_follows_trace_id_not_run_id():
+    client = Client(api_key="test-api-key", tracing_sampling_rate=0.5)
+
+    # Child's own id would be filtered, but its trace is sampled -> kept.
+    child_in_sampled_trace = _sampling_run(FILTERED_RUN_ID, trace_id=SAMPLED_RUN_ID)
+    # Child's own id would be sampled, but its trace is filtered -> dropped.
+    child_in_filtered_trace = _sampling_run(SAMPLED_RUN_ID, trace_id=FILTERED_RUN_ID)
+
+    assert client._filter_for_sampling([child_in_sampled_trace, child_in_filtered_trace]) == [child_in_sampled_trace]
+
+
+def test_feedback_sampling_follows_run_id():
+    client = Client(api_key="test-api-key", tracing_sampling_rate=0.5)
+    client._info = ls_schemas.LangSmithInfo()
+
+    with patch.object(Client, "request_with_retries") as mock_request:
+        sampled_feedback = client.create_feedback(
+            run_id=SAMPLED_RUN_ID,
+            key="correctness",
+            score=1,
+        )
+        assert sampled_feedback.run_id == SAMPLED_RUN_ID
+        mock_request.assert_called_once()
+
+    with patch.object(Client, "request_with_retries") as mock_request:
+        filtered_feedback = client.create_feedback(
+            run_id=FILTERED_RUN_ID,
+            key="correctness",
+            score=0,
+        )
+        assert filtered_feedback.run_id == FILTERED_RUN_ID
+        mock_request.assert_not_called()
+
+
+def test_evaluation_feedback_forwards_trace_id_only_for_its_own_run():
+    client = Client(api_key="test-api-key")
+    run = ls_schemas.Run(
+        id=uuid.uuid4(),
+        trace_id=uuid.uuid4(),
+        name="target",
+        run_type="chain",
+        start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+
+    with patch.object(Client, "create_feedback") as mock_create:
+        # Scoring the run itself: its trace is known, so it is forwarded.
+        client._log_evaluation_feedback({"key": "quality", "score": 1}, run=run)
+        assert mock_create.call_args.kwargs["trace_id"] == run.trace_id
+
+    with patch.object(Client, "create_feedback") as mock_create:
+        # target_run_id names a different run, whose trace we cannot know from
+        # `run`. Sampling must fall back to the run id rather than guess.
+        other_id = uuid.uuid4()
+        client._log_evaluation_feedback({"key": "quality", "score": 1, "target_run_id": other_id}, run=run)
+        assert mock_create.call_args.kwargs["run_id"] == other_id
+        assert mock_create.call_args.kwargs["trace_id"] is None
+
+
+def test_update_sampling_recovers_trace_from_dotted_order():
+    client = Client(api_key="test-api-key", tracing_sampling_rate=0.5)
+    client._info = ls_schemas.LangSmithInfo()
+    # A child whose own id would be filtered out if hashed on its own.
+    child_id = FILTERED_RUN_ID
+
+    def _dotted(root: uuid.UUID) -> str:
+        return f"20240101T000000000000Z{root}.20240101T000000000001Z{child_id}"
+
+    # Root sampled in -> the child's patch goes out with it.
+    with patch.object(Client, "request_with_retries") as mock_request:
+        client.update_run(
+            child_id,
+            trace_id=None,
+            dotted_order=_dotted(SAMPLED_RUN_ID),
+            outputs={"a": 1},
+        )
+        mock_request.assert_called_once()
+
+    # Root filtered out -> no orphan patch.
+    with patch.object(Client, "request_with_retries") as mock_request:
+        client.update_run(
+            child_id,
+            trace_id=None,
+            dotted_order=_dotted(FILTERED_RUN_ID),
+            outputs={"a": 1},
+        )
+        mock_request.assert_not_called()
+
+
+def test_feedback_sampling_follows_trace_id_not_run_id():
+    client = Client(api_key="test-api-key", tracing_sampling_rate=0.5)
+    client._info = ls_schemas.LangSmithInfo()
+    child_id = uuid.uuid4()
+
+    # The child's own id is irrelevant: its trace was sampled in.
+    with patch.object(Client, "request_with_retries") as mock_request:
+        client.create_feedback(
+            run_id=child_id,
+            trace_id=SAMPLED_RUN_ID,
+            key="correctness",
+            score=1,
+        )
+        mock_request.assert_called_once()
+
+    # Same child, filtered trace -> nothing sent.
+    with patch.object(Client, "request_with_retries") as mock_request:
+        client.create_feedback(
+            run_id=child_id,
+            trace_id=FILTERED_RUN_ID,
+            key="correctness",
+            score=0,
+        )
+        mock_request.assert_not_called()
+
+
+@pytest.mark.parametrize("method", ["batch_ingest_runs", "multipart_ingest"])
+def test_sampling_before_transform_in_batch_and_multipart(method: str):
+    """Verify that _run_transform is only called for runs that survive sampling."""
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+
+    client = Client(
+        api_key="test-api-key",
+        tracing_sampling_rate=0.5,
+        session=mock_session,
+    )
+
+    creates = [_sampling_run(SAMPLED_RUN_ID), _sampling_run(FILTERED_RUN_ID)]
+    updates = [
+        {**_sampling_run(SAMPLED_RUN_ID), "outputs": {"result": "sampled output"}},
+        {**_sampling_run(FILTERED_RUN_ID), "outputs": {"result": "filtered output"}},
+    ]
+
+    original_run_transform = Client._run_transform
+    transformed_ids: list[uuid.UUID] = []
+
+    def tracking_transform(self, run, **kwargs):
+        result = original_run_transform(self, run, **kwargs)
+        transformed_ids.append(result["id"])
+        return result
+
+    with patch.object(Client, "_run_transform", tracking_transform):
+        fn = getattr(client, method)
+        fn(create=creates, update=updates)
+
+    assert SAMPLED_RUN_ID in transformed_ids
+    assert FILTERED_RUN_ID not in transformed_ids, f"{method} called _run_transform on a filtered-out run"
+    assert transformed_ids.count(SAMPLED_RUN_ID) == 2
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_select_eval_results(mock_session_cls: mock.Mock):
+    expected = EvaluationResult(
+        key="foo",
+        value="bar",
+        score=7899082,
+        metadata={"a": "b"},
+        comment="hi",
+        feedback_config={"c": "d"},
+    )
+    client = Client(api_key="test")
+    for count, input_ in [
+        (1, expected),
+        (1, expected.dict()),
+        (1, {"results": [expected]}),
+        (1, {"results": [expected.dict()]}),
+        (2, {"results": [expected.dict(), expected.dict()]}),
+        (2, {"results": [expected, expected]}),
+    ]:
+        op = client._select_eval_results(input_)
+        assert len(op) == count
+        assert op == [expected] * count
+
+    expected2 = EvaluationResult(
+        key="foo",
+        metadata={"a": "b"},
+        comment="this is a comment",
+        feedback_config={"c": "d"},
+    )
+
+    as_reasoning = {
+        "reasoning": expected2.comment,
+        **expected2.dict(exclude={"comment"}),
+    }
+    for input_ in [as_reasoning, {"results": [as_reasoning]}, {"results": [expected2]}]:
+        assert client._select_eval_results(input_) == [
+            expected2,
+        ]
+
+
+@pytest.mark.parametrize("client_cls", [Client, AsyncClient])
+@mock.patch("langsmith.client.requests.Session")
+@mock.patch.dict(
+    os.environ,
+    {"LANGCHAIN_API_KEY": "", "LANGSMITH_API_KEY": "", "LANGSMITH_TRACING": "true"},
+    clear=True,
+)
+def test_validate_api_key_if_hosted_with_tracing(
+    _mock_session: mock.Mock, client_cls: Union[Type[Client], Type[AsyncClient]]
+) -> None:
+    from langsmith import utils as ls_utils
+
+    ls_utils.get_env_var.cache_clear()
+    with pytest.warns(ls_utils.LangSmithMissingAPIKeyWarning):
+        client_cls(api_url="https://api.smith.langchain.com")
+    with warnings.catch_warnings():
+        # Check no warning is raised here.
+        warnings.simplefilter("error")
+        client_cls(api_url="http://localhost:1984")
+
+
+@pytest.mark.parametrize("client_cls", [Client, AsyncClient])
+@mock.patch("langsmith.client.requests.Session")
+@mock.patch.dict(
+    os.environ,
+    {"LANGCHAIN_API_KEY": "", "LANGSMITH_API_KEY": "", "LANGSMITH_TRACING": "false"},
+    clear=True,
+)
+def test_validate_api_key_if_hosted_without_tracing(
+    _mock_session: mock.Mock, client_cls: Union[Type[Client], Type[AsyncClient]]
+) -> None:
+    from langsmith import utils as ls_utils
+
+    ls_utils.get_env_var.cache_clear()
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        client_cls(api_url="https://api.smith.langchain.com")
+    # Other tests' background threads leak unrelated warnings (unclosed loop,
+    # blocked socket) into this window; only the API-key warning matters here.
+    missing_key = [x for x in w if issubclass(x.category, ls_utils.LangSmithMissingAPIKeyWarning)]
+    assert not missing_key, [str(x.message) for x in missing_key]
+
+
+class TestResolveTracingMode:
+    """Tests for _resolve_tracing_mode and the Client tracing_mode parameter."""
+
+    def teardown_method(self):
+        _clear_env_cache()
+
+    def test_default_is_langsmith(self):
+        assert _resolve_tracing_mode(None) == "langsmith"
+
+    @pytest.mark.parametrize("mode", ["langsmith", "otel", "hybrid"])
+    def test_explicit_arg_returned(self, mode: str):
+        assert _resolve_tracing_mode(mode) == mode  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("mode", ["Langsmith", "OTEL", "Hybrid", "OTel"])
+    def test_explicit_arg_case_insensitive(self, mode: str):
+        assert _resolve_tracing_mode(mode) == mode.lower()  # type: ignore[arg-type]
+
+    def test_explicit_arg_invalid_raises(self):
+        with pytest.raises(LangSmithUserError, match="Invalid tracing_mode='bad'"):
+            _resolve_tracing_mode("bad")  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("mode", ["langsmith", "otel", "hybrid"])
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_env_var_fallback(self, mode: str):
+        os.environ["LANGSMITH_TRACING_MODE"] = mode
+        _clear_env_cache()
+        assert _resolve_tracing_mode(None) == mode
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_env_var_case_insensitive(self):
+        os.environ["LANGSMITH_TRACING_MODE"] = "HYBRID"
+        _clear_env_cache()
+        assert _resolve_tracing_mode(None) == "hybrid"
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_env_var_invalid_raises(self):
+        os.environ["LANGSMITH_TRACING_MODE"] = "nope"
+        _clear_env_cache()
+        with pytest.raises(LangSmithUserError, match="Invalid LANGSMITH_TRACING_MODE"):
+            _resolve_tracing_mode(None)
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_explicit_arg_takes_precedence_over_env_var(self):
+        os.environ["LANGSMITH_TRACING_MODE"] = "hybrid"
+        _clear_env_cache()
+        assert _resolve_tracing_mode("otel") == "otel"
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_legacy_otel_only_maps_to_otel(self):
+        os.environ["LANGSMITH_OTEL_ONLY"] = "true"
+        _clear_env_cache()
+        assert _resolve_tracing_mode(None) == "otel"
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_legacy_otel_enabled_maps_to_hybrid(self):
+        os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
+        _clear_env_cache()
+        assert _resolve_tracing_mode(None) == "hybrid"
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_legacy_otel_enabled_plus_otel_only(self):
+        os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
+        os.environ["LANGSMITH_OTEL_ONLY"] = "true"
+        _clear_env_cache()
+        assert _resolve_tracing_mode(None) == "otel"
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_conflict_warning_when_tracing_mode_and_legacy_set(self):
+        os.environ["LANGSMITH_TRACING_MODE"] = "langsmith"
+        os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
+        _clear_env_cache()
+        with pytest.warns(UserWarning, match="legacy"):
+            _resolve_tracing_mode(None)
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_no_warning_when_only_tracing_mode_set(self):
+        os.environ["LANGSMITH_TRACING_MODE"] = "otel"
+        _clear_env_cache()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert _resolve_tracing_mode(None) == "otel"
+
+    def test_otel_enabled_true_maps_to_hybrid(self):
+        with pytest.warns(FutureWarning, match="otel_enabled"):
+            assert _resolve_tracing_mode(None, otel_enabled=True) == "hybrid"
+
+    @mock.patch.dict(os.environ, {}, clear=True)
+    def test_otel_enabled_true_with_otel_only_envvar(self):
+        os.environ["LANGSMITH_OTEL_ONLY"] = "true"
+        _clear_env_cache()
+        with pytest.warns(FutureWarning, match="otel_enabled"):
+            assert _resolve_tracing_mode(None, otel_enabled=True) == "otel"
+
+    def test_otel_enabled_false_maps_to_langsmith(self):
+        with pytest.warns(FutureWarning, match="otel_enabled"):
+            assert _resolve_tracing_mode(None, otel_enabled=False) == "langsmith"
+
+    def test_tracing_mode_takes_precedence_over_otel_enabled(self):
+        result = _resolve_tracing_mode("otel", otel_enabled=True)
+        assert result == "otel"
+
+
+def _make_mock_otel():
+    """Build a mock return value for _import_otel that satisfies Client.__init__."""
+    mock_otel_trace = MagicMock()
+    mock_otel_trace.ProxyTracerProvider = type("ProxyTracerProvider", (), {})
+    mock_provider = MagicMock()
+    mock_provider.__class__ = type("RealProvider", (), {})
+    mock_otel_trace.get_tracer_provider.return_value = mock_provider
+    mock_set_span = MagicMock()
+    mock_get_provider = MagicMock()
+    mock_exporter_cls = MagicMock()
+    return mock_otel_trace, mock_set_span, mock_get_provider, mock_exporter_cls
+
+
+class TestClientTracingMode:
+    """Tests for Client(tracing_mode=...) via explicit arg and env var."""
+
+    def teardown_method(self):
+        _clear_env_cache()
+
+    @mock.patch("langsmith.client.requests.Session")
+    @mock.patch.dict(
+        os.environ,
+        {"LANGSMITH_API_KEY": "lsv2_pt_fake", "LANGSMITH_TRACING": "true"},
+        clear=True,
+    )
+    def test_default_mode_is_langsmith(self, _mock_session: mock.Mock):
+        _clear_env_cache()
+        client = Client(api_url="http://localhost:1984")
+        assert client.tracing_mode == "langsmith"
+
+    @mock.patch("langsmith.client._import_otel", return_value=_make_mock_otel())
+    @mock.patch("langsmith.client.requests.Session")
+    @mock.patch.dict(
+        os.environ,
+        {"LANGSMITH_API_KEY": "lsv2_pt_fake", "LANGSMITH_TRACING": "true"},
+        clear=True,
+    )
+    def test_explicit_otel_mode(self, _mock_session: mock.Mock, _mock_import: mock.Mock):
+        _clear_env_cache()
+        client = Client(api_url="http://localhost:1984", tracing_mode="otel")
+        assert client.tracing_mode == "otel"
+        assert client.otel_exporter is not None
+
+    @mock.patch("langsmith.client._import_otel", return_value=_make_mock_otel())
+    @mock.patch("langsmith.client.requests.Session")
+    @mock.patch.dict(
+        os.environ,
+        {"LANGSMITH_API_KEY": "lsv2_pt_fake", "LANGSMITH_TRACING": "true"},
+        clear=True,
+    )
+    def test_explicit_hybrid_mode(self, _mock_session: mock.Mock, _mock_import: mock.Mock):
+        _clear_env_cache()
+        client = Client(api_url="http://localhost:1984", tracing_mode="hybrid")
+        assert client.tracing_mode == "hybrid"
+        assert client.otel_exporter is not None
+
+    @mock.patch("langsmith.client._import_otel", return_value=_make_mock_otel())
+    @mock.patch("langsmith.client.requests.Session")
+    @mock.patch.dict(
+        os.environ,
+        {
+            "LANGSMITH_API_KEY": "lsv2_pt_fake",
+            "LANGSMITH_TRACING_MODE": "otel",
+        },
+        clear=True,
+    )
+    def test_otel_mode_via_env_var(self, _mock_session: mock.Mock, _mock_import: mock.Mock):
+        _clear_env_cache()
+        client = Client(api_url="http://localhost:1984")
+        assert client.tracing_mode == "otel"
+        assert client.otel_exporter is not None
+
+    @mock.patch("langsmith.client._import_otel", return_value=_make_mock_otel())
+    @mock.patch("langsmith.client.requests.Session")
+    @mock.patch.dict(
+        os.environ,
+        {
+            "LANGSMITH_API_KEY": "lsv2_pt_fake",
+            "LANGSMITH_TRACING_MODE": "hybrid",
+        },
+        clear=True,
+    )
+    def test_hybrid_mode_via_env_var(self, _mock_session: mock.Mock, _mock_import: mock.Mock):
+        _clear_env_cache()
+        client = Client(api_url="http://localhost:1984")
+        assert client.tracing_mode == "hybrid"
+        assert client.otel_exporter is not None
+
+    @mock.patch("langsmith.client._import_otel", return_value=_make_mock_otel())
+    @mock.patch("langsmith.client.requests.Session")
+    @mock.patch.dict(
+        os.environ,
+        {
+            "LANGSMITH_API_KEY": "lsv2_pt_fake",
+            "LANGSMITH_TRACING_MODE": "hybrid",
+        },
+        clear=True,
+    )
+    def test_explicit_arg_overrides_env_var(self, _mock_session: mock.Mock, _mock_import: mock.Mock):
+        _clear_env_cache()
+        client = Client(api_url="http://localhost:1984", tracing_mode="langsmith")
+        assert client.tracing_mode == "langsmith"
+        assert client.otel_exporter is None
+
+
+def test_parse_token_or_url():
+    # Test with URL
+    url = "https://smith.langchain.com/public/419dcab2-1d66-4b94-8901-0357ead390df/d"
+    api_url = "https://api.smith.langchain.com"
+    assert _parse_token_or_url(url, api_url) == (
+        api_url,
+        "419dcab2-1d66-4b94-8901-0357ead390df",
+    )
+
+    url = "https://smith.langchain.com/public/419dcab2-1d66-4b94-8901-0357ead390df/d"
+    beta_api_url = "https://beta.api.smith.langchain.com"
+    # Should still point to the correct public one
+    assert _parse_token_or_url(url, beta_api_url) == (
+        api_url,
+        "419dcab2-1d66-4b94-8901-0357ead390df",
+    )
+
+    token = "419dcab2-1d66-4b94-8901-0357ead390df"
+    assert _parse_token_or_url(token, api_url) == (
+        api_url,
+        token,
+    )
+
+    # Test with UUID object
+    token_uuid = uuid.UUID("419dcab2-1d66-4b94-8901-0357ead390df")
+    assert _parse_token_or_url(token_uuid, api_url) == (
+        api_url,
+        str(token_uuid),
+    )
+
+    # Test with custom num_parts
+    url_custom = "https://smith.langchain.com/public/419dcab2-1d66-4b94-8901-0357ead390df/p/q"
+    assert _parse_token_or_url(url_custom, api_url, num_parts=3) == (
+        api_url,
+        "419dcab2-1d66-4b94-8901-0357ead390df",
+    )
+
+    # Test with invalid URL
+    invalid_url = "https://invalid.com/419dcab2-1d66-4b94-8901-0357ead390df"
+    with pytest.raises(LangSmithUserError):
+        _parse_token_or_url(invalid_url, api_url)
+
+
+_PROMPT_COMMITS = [
+    (
+        True,
+        "tools",
+        {
+            "owner": "-",
+            "repo": "tweet-generator-example",
+            "commit_hash": "b862ce708ffeb932331a9345ea2a2fe6a76d62cf83e9aab834c24bb12bd516c9",
+            "manifest": {
+                "lc": 1,
+                "type": "constructor",
+                "id": ["langchain", "schema", "runnable", "RunnableSequence"],
+                "kwargs": {
+                    "first": {
+                        "lc": 1,
+                        "type": "constructor",
+                        "id": ["langchain", "prompts", "chat", "ChatPromptTemplate"],
+                        "kwargs": {
+                            "input_variables": ["topic"],
+                            "metadata": {
+                                "lc_hub_owner": "-",
+                                "lc_hub_repo": "tweet-generator-example",
+                                "lc_hub_commit_hash": "b862ce708ffeb932331a9345ea2a2fe6a76d62cf83e9aab834c24bb12bd516c9",
+                            },
+                            "messages": [
+                                {
+                                    "lc": 1,
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "chat",
+                                        "SystemMessagePromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "prompt": {
+                                            "lc": 1,
+                                            "name": "PromptTemplate",
+                                            "type": "constructor",
+                                            "id": [
+                                                "langchain",
+                                                "prompts",
+                                                "prompt",
+                                                "PromptTemplate",
+                                            ],
+                                            "kwargs": {
+                                                "input_variables": [],
+                                                "template_format": "f-string",
+                                                "template": "Generate a tweet based on the provided topic.",
+                                            },
+                                        }
+                                    },
+                                },
+                                {
+                                    "lc": 1,
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "chat",
+                                        "HumanMessagePromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "prompt": {
+                                            "lc": 1,
+                                            "name": "PromptTemplate",
+                                            "type": "constructor",
+                                            "id": [
+                                                "langchain",
+                                                "prompts",
+                                                "prompt",
+                                                "PromptTemplate",
+                                            ],
+                                            "kwargs": {
+                                                "input_variables": ["topic"],
+                                                "template_format": "f-string",
+                                                "template": "{topic}",
+                                            },
+                                        }
+                                    },
+                                },
+                            ],
+                        },
+                        "name": "ChatPromptTemplate",
+                    },
+                    "last": {
+                        "lc": 1,
+                        "type": "constructor",
+                        "id": ["langchain", "schema", "runnable", "RunnableBinding"],
+                        "name": "ChatAnthropic",
+                        "kwargs": {
+                            "bound": {
+                                "lc": 1,
+                                "type": "constructor",
+                                "name": "ChatAnthropic",
+                                "id": [
+                                    "langchain",
+                                    "chat_models",
+                                    "anthropic",
+                                    "ChatAnthropic",
+                                ],
+                                "kwargs": {
+                                    "temperature": 1.0,
+                                    "max_tokens": 1024,
+                                    "top_p": 1.0,
+                                    "top_k": -1,
+                                    "stream_usage": True,
+                                    "max_retries": 2,
+                                    "anthropic_api_url": "https://api.anthropic.com",
+                                    "anthropic_api_key": {
+                                        "id": ["ANTHROPIC_API_KEY"],
+                                        "lc": 1,
+                                        "type": "secret",
+                                    },
+                                    "model": "claude-3-5-sonnet-20240620",
+                                },
+                            },
+                            "kwargs": {
+                                "tools": [
+                                    {
+                                        "type": "function",
+                                        "function": {
+                                            "name": "GenerateTweet",
+                                            "description": "Submit your tweet.",
+                                            "parameters": {
+                                                "properties": {
+                                                    "tweet": {
+                                                        "type": "string",
+                                                        "description": "The generated tweet.",
+                                                    }
+                                                },
+                                                "required": ["tweet"],
+                                                "type": "object",
+                                            },
+                                        },
+                                    },
+                                    {
+                                        "type": "function",
+                                        "function": {
+                                            "name": "SomethingElse",
+                                            "description": "",
+                                            "parameters": {
+                                                "properties": {
+                                                    "aval": {
+                                                        "type": "array",
+                                                        "items": {"type": "string"},
+                                                    }
+                                                },
+                                                "required": [],
+                                                "type": "object",
+                                            },
+                                        },
+                                    },
+                                ]
+                            },
+                            "config": {},
+                        },
+                    },
+                },
+            },
+            "examples": [],
+        },
+    ),
+    (
+        True,
+        "structured",
+        {
+            "owner": "-",
+            "repo": "tweet-generator-example",
+            "commit_hash": "e8da7f9e80471ace9b96c4f8fd55a215020126521f1da8f66130604c101fc522",
+            "manifest": {
+                "lc": 1,
+                "type": "constructor",
+                "id": ["langchain", "schema", "runnable", "RunnableSequence"],
+                "kwargs": {
+                    "first": {
+                        "lc": 1,
+                        "type": "constructor",
+                        "id": [
+                            "langchain_core",
+                            "prompts",
+                            "structured",
+                            "StructuredPrompt",
+                        ],
+                        "kwargs": {
+                            "input_variables": ["topic"],
+                            "metadata": {
+                                "lc_hub_owner": "-",
+                                "lc_hub_repo": "tweet-generator-example",
+                                "lc_hub_commit_hash": "e8da7f9e80471ace9b96c4f8fd55a215020126521f1da8f66130604c101fc522",
+                            },
+                            "messages": [
+                                {
+                                    "lc": 1,
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "chat",
+                                        "SystemMessagePromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "prompt": {
+                                            "lc": 1,
+                                            "name": "PromptTemplate",
+                                            "type": "constructor",
+                                            "id": [
+                                                "langchain",
+                                                "prompts",
+                                                "prompt",
+                                                "PromptTemplate",
+                                            ],
+                                            "kwargs": {
+                                                "input_variables": [],
+                                                "template_format": "f-string",
+                                                "template": "Generate a tweet about the given topic.",
+                                            },
+                                        }
+                                    },
+                                },
+                                {
+                                    "lc": 1,
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "chat",
+                                        "HumanMessagePromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "prompt": {
+                                            "lc": 1,
+                                            "name": "PromptTemplate",
+                                            "type": "constructor",
+                                            "id": [
+                                                "langchain",
+                                                "prompts",
+                                                "prompt",
+                                                "PromptTemplate",
+                                            ],
+                                            "kwargs": {
+                                                "input_variables": ["topic"],
+                                                "template_format": "f-string",
+                                                "template": "{topic}",
+                                            },
+                                        }
+                                    },
+                                },
+                            ],
+                            "schema_": {
+                                "title": "GenerateTweet",
+                                "description": "Submit your tweet.",
+                                "type": "object",
+                                "properties": {
+                                    "tweet": {
+                                        "type": "string",
+                                        "description": "The generated tweet.",
+                                    }
+                                },
+                                "required": ["tweet"],
+                            },
+                        },
+                        "name": "StructuredPrompt",
+                    },
+                    "last": {
+                        "lc": 1,
+                        "type": "constructor",
+                        "name": "ChatAnthropic",
+                        "id": ["langchain", "schema", "runnable", "RunnableBinding"],
+                        "kwargs": {
+                            "bound": {
+                                "lc": 1,
+                                "type": "constructor",
+                                "name": "ChatAnthropic",
+                                "id": [
+                                    "langchain",
+                                    "chat_models",
+                                    "anthropic",
+                                    "ChatAnthropic",
+                                ],
+                                "kwargs": {
+                                    "temperature": 1.0,
+                                    "stream_usage": True,
+                                    "anthropic_api_url": "https://api.anthropic.com",
+                                    "max_tokens": 1024,
+                                    "max_retries": 2,
+                                    "top_p": 1.0,
+                                    "top_k": -1,
+                                    "anthropic_api_key": {
+                                        "id": ["ANTHROPIC_API_KEY"],
+                                        "lc": 1,
+                                        "type": "secret",
+                                    },
+                                    "model": "claude-3-5-sonnet-20240620",
+                                },
+                            },
+                            "config": {},
+                        },
+                    },
+                },
+            },
+            "examples": [],
+        },
+    ),
+    (
+        True,
+        "none",
+        {
+            "owner": "-",
+            "repo": "tweet-generator-example-with-nothing",
+            "commit_hash": "06c657373bdfcadec0d4d0933416b2c11f1b283ef3d1ca5dfb35dd6ed28b9f78",
+            "manifest": {
+                "lc": 1,
+                "type": "constructor",
+                "id": ["langchain", "schema", "runnable", "RunnableSequence"],
+                "kwargs": {
+                    "first": {
+                        "lc": 1,
+                        "type": "constructor",
+                        "id": ["langchain", "prompts", "chat", "ChatPromptTemplate"],
+                        "name": "ChatPromptTemplate",
+                        "kwargs": {
+                            "metadata": {
+                                "lc_hub_owner": "-",
+                                "lc_hub_repo": "tweet-generator-example-with-nothing",
+                                "lc_hub_commit_hash": "06c657373bdfcadec0d4d0933416b2c11f1b283ef3d1ca5dfb35dd6ed28b9f78",
+                            },
+                            "messages": [
+                                {
+                                    "lc": 1,
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "chat",
+                                        "SystemMessagePromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "prompt": {
+                                            "lc": 1,
+                                            "name": "PromptTemplate",
+                                            "type": "constructor",
+                                            "id": [
+                                                "langchain",
+                                                "prompts",
+                                                "prompt",
+                                                "PromptTemplate",
+                                            ],
+                                            "kwargs": {
+                                                "input_variables": [],
+                                                "template_format": "f-string",
+                                                "template": "Generate a tweet about the given topic.",
+                                            },
+                                        }
+                                    },
+                                },
+                                {
+                                    "lc": 1,
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "chat",
+                                        "HumanMessagePromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "prompt": {
+                                            "lc": 1,
+                                            "name": "PromptTemplate",
+                                            "type": "constructor",
+                                            "id": [
+                                                "langchain",
+                                                "prompts",
+                                                "prompt",
+                                                "PromptTemplate",
+                                            ],
+                                            "kwargs": {
+                                                "input_variables": ["topic"],
+                                                "template_format": "f-string",
+                                                "template": "{topic}",
+                                            },
+                                        }
+                                    },
+                                },
+                            ],
+                            "input_variables": ["topic"],
+                        },
+                    },
+                    "last": {
+                        "lc": 1,
+                        "type": "constructor",
+                        "id": ["langchain", "schema", "runnable", "RunnableBinding"],
+                        "name": "ChatOpenAI",
+                        "kwargs": {
+                            "bound": {
+                                "lc": 1,
+                                "type": "constructor",
+                                "name": "ChatOpenAI",
+                                "id": [
+                                    "langchain",
+                                    "chat_models",
+                                    "openai",
+                                    "ChatOpenAI",
+                                ],
+                                "kwargs": {
+                                    "openai_api_key": {
+                                        "id": ["OPENAI_API_KEY"],
+                                        "lc": 1,
+                                        "type": "secret",
+                                    },
+                                    "stream_usage": True,
+                                    "model_name": "gpt-4o-mini",
+                                    "output_version": "v0",
+                                },
+                            },
+                            "config": {},
+                        },
+                    },
+                },
+            },
+            "examples": [],
+        },
+    ),
+    (
+        True,
+        "none",
+        {
+            "owner": "-",
+            "repo": "tweet-generator-example-with-nothing",
+            "commit_hash": "06c657373bdfcadec0d4d0933416b2c11f1b283ef3d1ca5dfb35dd6ed28b9f78",
+            "manifest": {
+                "lc": 1,
+                "type": "constructor",
+                "id": ["langchain", "schema", "runnable", "RunnableSequence"],
+                "kwargs": {
+                    "first": {
+                        "lc": 1,
+                        "type": "constructor",
+                        "name": "ChatPromptTemplate",
+                        "id": ["langchain", "prompts", "chat", "ChatPromptTemplate"],
+                        "kwargs": {
+                            "metadata": {
+                                "lc_hub_owner": "-",
+                                "lc_hub_repo": "tweet-generator-example-with-nothing",
+                                "lc_hub_commit_hash": "06c657373bdfcadec0d4d0933416b2c11f1b283ef3d1ca5dfb35dd6ed28b9f78",
+                            },
+                            "messages": [
+                                {
+                                    "lc": 1,
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "chat",
+                                        "SystemMessagePromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "prompt": {
+                                            "lc": 1,
+                                            "name": "PromptTemplate",
+                                            "type": "constructor",
+                                            "id": [
+                                                "langchain",
+                                                "prompts",
+                                                "prompt",
+                                                "PromptTemplate",
+                                            ],
+                                            "kwargs": {
+                                                "input_variables": [],
+                                                "template_format": "f-string",
+                                                "template": "Generate a tweet about the given topic.",
+                                            },
+                                        }
+                                    },
+                                },
+                                {
+                                    "lc": 1,
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "chat",
+                                        "HumanMessagePromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "prompt": {
+                                            "lc": 1,
+                                            "name": "PromptTemplate",
+                                            "type": "constructor",
+                                            "id": [
+                                                "langchain",
+                                                "prompts",
+                                                "prompt",
+                                                "PromptTemplate",
+                                            ],
+                                            "kwargs": {
+                                                "input_variables": ["topic"],
+                                                "template_format": "f-string",
+                                                "template": "{topic}",
+                                            },
+                                        }
+                                    },
+                                },
+                            ],
+                            "input_variables": ["topic"],
+                        },
+                    },
+                    "last": {
+                        "lc": 1,
+                        "type": "constructor",
+                        "name": "ChatAnthropic",
+                        "id": ["langchain", "schema", "runnable", "RunnableBinding"],
+                        "kwargs": {
+                            "bound": {
+                                "lc": 1,
+                                "type": "constructor",
+                                "name": "ChatAnthropic",
+                                "id": [
+                                    "langchain",
+                                    "chat_models",
+                                    "anthropic",
+                                    "ChatAnthropic",
+                                ],
+                                "kwargs": {
+                                    "anthropic_api_key": {
+                                        "id": ["ANTHROPIC_API_KEY"],
+                                        "lc": 1,
+                                        "type": "secret",
+                                    },
+                                    "anthropic_api_url": "https://api.anthropic.com",
+                                    "max_retries": 2,
+                                    "max_tokens": 1024,
+                                    "model": "claude-3-haiku-20240307",
+                                    "stream_usage": True,
+                                },
+                            },
+                            "config": {},
+                        },
+                    },
+                },
+            },
+            "examples": [],
+        },
+    ),
+    (
+        False,
+        "tools",
+        {
+            "owner": "-",
+            "repo": "tweet-generator-example",
+            "commit_hash": "b862ce708ffeb932331a9345ea2a2fe6a76d62cf83e9aab834c24bb12bd516c9",
+            "manifest": {
+                "lc": 1,
+                "type": "constructor",
+                "id": ["langchain", "prompts", "chat", "ChatPromptTemplate"],
+                "kwargs": {
+                    "input_variables": ["topic"],
+                    "metadata": {
+                        "lc_hub_owner": "-",
+                        "lc_hub_repo": "tweet-generator-example",
+                        "lc_hub_commit_hash": "b862ce708ffeb932331a9345ea2a2fe6a76d62cf83e9aab834c24bb12bd516c9",
+                    },
+                    "messages": [
+                        {
+                            "lc": 1,
+                            "type": "constructor",
+                            "id": [
+                                "langchain",
+                                "prompts",
+                                "chat",
+                                "SystemMessagePromptTemplate",
+                            ],
+                            "kwargs": {
+                                "prompt": {
+                                    "lc": 1,
+                                    "name": "PromptTemplate",
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "prompt",
+                                        "PromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "input_variables": [],
+                                        "template_format": "f-string",
+                                        "template": "Generate a tweet based on the provided topic.",
+                                    },
+                                }
+                            },
+                        },
+                        {
+                            "lc": 1,
+                            "type": "constructor",
+                            "id": [
+                                "langchain",
+                                "prompts",
+                                "chat",
+                                "HumanMessagePromptTemplate",
+                            ],
+                            "kwargs": {
+                                "prompt": {
+                                    "lc": 1,
+                                    "name": "PromptTemplate",
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "prompt",
+                                        "PromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "input_variables": ["topic"],
+                                        "template_format": "f-string",
+                                        "template": "{topic}",
+                                    },
+                                }
+                            },
+                        },
+                    ],
+                },
+                "name": "ChatPromptTemplate",
+            },
+            "examples": [],
+        },
+    ),
+    (
+        False,
+        "structured",
+        {
+            "owner": "-",
+            "repo": "tweet-generator-example",
+            "commit_hash": "e8da7f9e80471ace9b96c4f8fd55a215020126521f1da8f66130604c101fc522",
+            "manifest": {
+                "lc": 1,
+                "type": "constructor",
+                "id": ["langchain_core", "prompts", "structured", "StructuredPrompt"],
+                "kwargs": {
+                    "input_variables": ["topic"],
+                    "metadata": {
+                        "lc_hub_owner": "-",
+                        "lc_hub_repo": "tweet-generator-example",
+                        "lc_hub_commit_hash": "e8da7f9e80471ace9b96c4f8fd55a215020126521f1da8f66130604c101fc522",
+                    },
+                    "messages": [
+                        {
+                            "lc": 1,
+                            "type": "constructor",
+                            "id": [
+                                "langchain",
+                                "prompts",
+                                "chat",
+                                "SystemMessagePromptTemplate",
+                            ],
+                            "kwargs": {
+                                "prompt": {
+                                    "lc": 1,
+                                    "name": "PromptTemplate",
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "prompt",
+                                        "PromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "input_variables": [],
+                                        "template_format": "f-string",
+                                        "template": "Generate a tweet about the given topic.",
+                                    },
+                                }
+                            },
+                        },
+                        {
+                            "lc": 1,
+                            "type": "constructor",
+                            "id": [
+                                "langchain",
+                                "prompts",
+                                "chat",
+                                "HumanMessagePromptTemplate",
+                            ],
+                            "kwargs": {
+                                "prompt": {
+                                    "lc": 1,
+                                    "name": "PromptTemplate",
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "prompt",
+                                        "PromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "input_variables": ["topic"],
+                                        "template_format": "f-string",
+                                        "template": "{topic}",
+                                    },
+                                }
+                            },
+                        },
+                    ],
+                    "schema_": {
+                        "title": "GenerateTweet",
+                        "description": "Submit your tweet.",
+                        "type": "object",
+                        "properties": {
+                            "tweet": {
+                                "type": "string",
+                                "description": "The generated tweet.",
+                            }
+                        },
+                        "required": ["tweet"],
+                    },
+                },
+                "name": "StructuredPrompt",
+            },
+            "examples": [],
+        },
+    ),
+    (
+        False,
+        "none",
+        {
+            "owner": "-",
+            "repo": "tweet-generator-example-with-nothing",
+            "commit_hash": "06c657373bdfcadec0d4d0933416b2c11f1b283ef3d1ca5dfb35dd6ed28b9f78",
+            "manifest": {
+                "lc": 1,
+                "type": "constructor",
+                "id": ["langchain", "prompts", "chat", "ChatPromptTemplate"],
+                "name": "ChatPromptTemplate",
+                "kwargs": {
+                    "metadata": {
+                        "lc_hub_owner": "-",
+                        "lc_hub_repo": "tweet-generator-example-with-nothing",
+                        "lc_hub_commit_hash": "06c657373bdfcadec0d4d0933416b2c11f1b283ef3d1ca5dfb35dd6ed28b9f78",
+                    },
+                    "messages": [
+                        {
+                            "lc": 1,
+                            "type": "constructor",
+                            "id": [
+                                "langchain",
+                                "prompts",
+                                "chat",
+                                "SystemMessagePromptTemplate",
+                            ],
+                            "kwargs": {
+                                "prompt": {
+                                    "lc": 1,
+                                    "name": "PromptTemplate",
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "prompt",
+                                        "PromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "input_variables": [],
+                                        "template_format": "f-string",
+                                        "template": "Generate a tweet about the given topic.",
+                                    },
+                                }
+                            },
+                        },
+                        {
+                            "lc": 1,
+                            "type": "constructor",
+                            "id": [
+                                "langchain",
+                                "prompts",
+                                "chat",
+                                "HumanMessagePromptTemplate",
+                            ],
+                            "kwargs": {
+                                "prompt": {
+                                    "lc": 1,
+                                    "name": "PromptTemplate",
+                                    "type": "constructor",
+                                    "id": [
+                                        "langchain",
+                                        "prompts",
+                                        "prompt",
+                                        "PromptTemplate",
+                                    ],
+                                    "kwargs": {
+                                        "input_variables": ["topic"],
+                                        "template_format": "f-string",
+                                        "template": "{topic}",
+                                    },
+                                }
+                            },
+                        },
+                    ],
+                    "input_variables": ["topic"],
+                },
+            },
+            "examples": [],
+        },
+    ),
+]
+
+
+def test_pull_prompt_commit_requires_dangerous_flag_for_public_prompts():
+    mock_session = mock.Mock()
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="fake_api_key",
+        session=mock_session,
+        info=ls_schemas.LangSmithInfo(version="0.6.0"),
+        disable_prompt_cache=True,
+    )
+
+    with pytest.raises(ValueError, match="dangerously_pull_public_prompt=True"):
+        client.pull_prompt_commit("someuser/someprompt")
+
+    mock_session.request.assert_not_called()
+
+
+def test_pull_prompt_commit_allows_public_prompts_with_dangerous_flag():
+    mock_session = mock.Mock()
+    mock_session.request.return_value = mock.Mock(
+        json=lambda: {
+            "commit_hash": "abc123",
+            "manifest": {"type": "constructor"},
+            "examples": [],
+        }
+    )
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="fake_api_key",
+        session=mock_session,
+        info=ls_schemas.LangSmithInfo(version="0.6.0"),
+        disable_prompt_cache=True,
+    )
+
+    commit = client.pull_prompt_commit("someuser/someprompt", dangerously_pull_public_prompt=True)
+
+    assert commit.owner == "someuser"
+    assert commit.repo == "someprompt"
+    assert commit.commit_hash == "abc123"
+
+
+@pytest.mark.parametrize("include_model, manifest_type, manifest_data", _PROMPT_COMMITS)
+def test_pull_prompt(
+    include_model: bool,
+    manifest_type: Literal["structured", "tool", "none"],
+    manifest_data: dict,
+):
+    try:
+        from langchain_core.language_models.base import BaseLanguageModel
+        from langchain_core.output_parsers import JsonOutputKeyToolsParser
+        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_core.prompts.structured import StructuredPrompt
+        from langchain_core.runnables import RunnableBinding, RunnableSequence
+    except ImportError:
+        pytest.skip("Skipping test that requires langchain")
+    # Create a mock session
+    mock_session = mock.Mock()
+    # prompt_commit = ls_schemas.PromptCommit(**manifest_data)
+    mock_session.request.side_effect = lambda method, url, **kwargs: mock.Mock(
+        json=lambda: manifest_data if "/commits/" in url else None
+    )
+
+    # Create a client with Info pre-created and version >= 0.6
+    info = ls_schemas.LangSmithInfo(version="0.6.0")
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="fake_api_key",
+        session=mock_session,
+        info=info,
+        disable_prompt_cache=True,
+    )
+    secrets = {
+        "ANTHROPIC_API_KEY": "test_anthropic_key",
+        "OPENAI_API_KEY": "test_openai_key",
+    }
+    try:
+        result = client.pull_prompt(prompt_identifier=manifest_data["repo"], include_model=include_model)
+    except ValueError as e:
+        if include_model:
+            assert "no secrets were provided" in str(e)
+            result = client.pull_prompt(
+                prompt_identifier=manifest_data["repo"],
+                include_model=include_model,
+                secrets=secrets,
+            )
+        else:
+            raise e
+    expected_prompt_type = StructuredPrompt if manifest_type == "structured" else ChatPromptTemplate
+    if include_model:
+        assert isinstance(result, RunnableSequence)
+        assert isinstance(result.first, expected_prompt_type)
+        if manifest_type != "structured":
+            assert not isinstance(result.first, StructuredPrompt)
+            assert len(result.steps) == 2
+            if manifest_type == "tool":
+                assert result.steps[1].kwargs.get("tools")
+        else:
+            assert len(result.steps) == 3
+            assert isinstance(result.steps[1], RunnableBinding)
+            assert result.steps[1].kwargs.get("tools")
+            assert isinstance(result.steps[1].bound, BaseLanguageModel)
+            assert isinstance(result.steps[2], JsonOutputKeyToolsParser)
+
+    else:
+        assert isinstance(result, expected_prompt_type)
+        if manifest_type != "structured":
+            assert not isinstance(result, StructuredPrompt)
+
+
+@pytest.mark.parametrize("include_model, manifest_type, manifest_data", _PROMPT_COMMITS)
+def test_pull_and_push_prompt(
+    include_model: bool,
+    manifest_type: str,
+    manifest_data: dict,
+):
+    """Test that pulling a prompt and then pushing it results in the same manifest structure."""
+    from langchain_core.load import dumpd, dumps
+
+    # Create a mock session for pull_prompt and push_prompt
+    mock_session = mock.Mock()
+
+    def mock_request(method, url, **kwargs):
+        if method == "GET" and "/commits/" in url:
+            return mock.Mock(json=lambda: manifest_data)
+        elif method == "POST" and "/commits/" in url:
+            return mock.Mock(json=lambda: {"commit": {"commit_hash": "new_hash", "id": "new_id"}})
+        else:
+            return mock.Mock(json=lambda: {})
+
+    mock_session.request.side_effect = mock_request
+
+    # Create a client with Info pre-created and version >= 0.6
+    info = ls_schemas.LangSmithInfo(version="0.6.0")
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="fake_api_key",
+        session=mock_session,
+        info=info,
+        auto_batch_tracing=False,
+        disable_prompt_cache=True,
+    )
+
+    # Mock the necessary methods for push_prompt and settings
+    mock_settings = ls_schemas.LangSmithSettings(
+        id="test-tenant-id",
+        display_name="Test Tenant",
+        created_at=datetime.now(),
+    )
+
+    with (
+        mock.patch("langsmith.client.Client._prompt_exists", return_value=True),
+        mock.patch(
+            "langsmith.client.Client._get_latest_commit_hash",
+            return_value="parent_hash",
+        ),
+        mock.patch("langsmith.client.Client._get_settings", return_value=mock_settings),
+    ):
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "LANGSMITH_API_KEY": "fake_api_key",
+                "LANGSMITH_ENDPOINT": "http://localhost:1984",
+            },
+            clear=True,
+        ):
+            # Pull the prompt
+            secrets = {
+                "ANTHROPIC_API_KEY": "test_anthropic_key",
+                "OPENAI_API_KEY": "test_openai_key",
+            }
+            try:
+                pulled_prompt = client.pull_prompt(prompt_identifier=manifest_data["repo"], include_model=include_model)
+            except ValueError as e:
+                if include_model:
+                    assert "no secrets were provided" in str(e)
+                    pulled_prompt = client.pull_prompt(
+                        prompt_identifier=manifest_data["repo"],
+                        include_model=include_model,
+                        secrets=secrets,
+                    )
+                else:
+                    raise e
+            # Capture the dumps call when pushing
+            pushed_manifest = None
+
+            def capture_dumps(obj):
+                nonlocal pushed_manifest
+                pushed_manifest = dumpd(obj)
+                # Call the real dumps function
+                return dumps(obj)
+
+            with mock.patch("langchain_core.load.dumps", side_effect=capture_dumps):
+                # Push the pulled prompt back
+                client.push_prompt(prompt_identifier=manifest_data["repo"], object=pulled_prompt)
+
+            # Verify the captured manifest structure
+            assert pushed_manifest is not None
+
+            # Convert the captured manifest back to a JSON dict for comparison
+            original_manifest = manifest_data["manifest"]
+
+            # The key test: the pushed structure should match the original manifest structure
+            # This verifies that our reverse transformation in push_prompt correctly undoes
+            # the expansion that pull_prompt does
+            assert pushed_manifest["id"] == original_manifest["id"]
+            assert pushed_manifest["type"] == original_manifest["type"]
+
+            # Strip None-valued keys before comparing: upstream langchain
+            # model classes occasionally add new optional kwargs that
+            # serialize as None by default (e.g. anthropic_proxy,
+            # output_version, openai_proxy), which shouldn't break the
+            # round-trip equivalence this test is checking.
+            def _strip_none(obj):
+                if isinstance(obj, dict):
+                    return {k: _strip_none(v) for k, v in obj.items() if v is not None}
+                if isinstance(obj, list):
+                    return [_strip_none(v) for v in obj]
+                return obj
+
+            assert _strip_none(original_manifest["kwargs"]) == _strip_none(pushed_manifest["kwargs"])
+
+
+def test_evaluate_methods() -> None:
+    client_args = set(inspect.signature(Client.evaluate).parameters).difference({"self"})
+    eval_args = set(inspect.signature(evaluate).parameters).difference({"client"})
+    assert client_args == eval_args
+
+    client_args = set(inspect.signature(Client.aevaluate).parameters).difference({"self"})
+    eval_args = set(inspect.signature(aevaluate).parameters).difference({"client"})
+    extra_args = client_args - eval_args
+    assert not extra_args
+
+
+@patch("langsmith.client.requests.Session")
+def test_create_run_with_zstd_compression(mock_session_cls: mock.Mock) -> None:
+    """Test that runs are sent using zstd compression when compression is enabled."""
+    # Prepare a mocked session
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    with patch.dict("os.environ", {}, clear=True):
+        info = ls_schemas.LangSmithInfo(
+            version="0.6.0",
+            instance_flags={"zstd_compression_enabled": True},
+            batch_ingest_config=ls_schemas.BatchIngestConfig(
+                use_multipart_endpoint=True,
+                size_limit=1,
+                size_limit_bytes=128,
+                scale_up_nthreads_limit=4,
+                scale_up_qsize_trigger=3,
+                scale_down_nempty_trigger=1,
+            ),
+        )
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="123",
+            auto_batch_tracing=True,
+            session=mock_session,
+            info=info,
+        )
+
+        # Create a few runs with larger payloads so there's something to compress
+        for i in range(2):
+            run_id = uuid.uuid4()
+            client.create_run(
+                name=f"my_test_run_{i}",
+                run_type="llm",
+                inputs={"some_key": "some_val" * 1000},
+                id=run_id,
+                trace_id=run_id,
+                dotted_order=str(run_id),
+            )
+
+        # Let the background threads flush
+        if client.tracing_queue:
+            client.tracing_queue.join()
+        if client._futures is not None:
+            for fut in client._futures:
+                fut.result()
+
+    time.sleep(0.1)
+
+    # Inspect the calls
+    post_calls = []
+    for call_obj in mock_session.request.mock_calls:
+        if call_obj.args and call_obj.args[0] == "POST":
+            post_calls.append(call_obj)
+    assert len(post_calls) >= 1, "Expected at least one POST to the compression endpoint"
+
+    zstd_magic = b"\x28\xb5\x2f\xfd"
+    bodies = []
+    for call_obj in post_calls:
+        call_data = call_obj[2]["data"]
+        if hasattr(call_data, "seek"):
+            # the client may already have consumed the buffer
+            call_data.seek(0)
+        if hasattr(call_data, "read"):
+            call_data = call_data.read()
+        bodies.append(call_data)
+    assert any(body.startswith(zstd_magic) for body in bodies), (
+        "Expected a request body to start with zstd magic bytes; it appears runs were not compressed."
+    )
+
+
+@patch("langsmith.client.requests.Session")
+def test_sample_rate_survives_zstd_compression(mock_session_cls: mock.Mock) -> None:
+    """The compression path must carry the sampling rate like any other send path.
+
+    ``_insert_runtime_env`` stamps ``ls_tracing_sample_rate`` into ``extra.metadata``
+    before the run is handed to the compressor. Decompress the exact bytes posted
+    over the wire and parse the multipart body to prove the rate survives the
+    zstd round trip, not just the pre-compression dict.
+    """
+    import zstandard
+
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    with patch.dict("os.environ", {}, clear=True):
+        info = ls_schemas.LangSmithInfo(
+            version="0.6.0",
+            instance_flags={"zstd_compression_enabled": True},
+            batch_ingest_config=ls_schemas.BatchIngestConfig(
+                use_multipart_endpoint=True,
+                size_limit=1,
+                size_limit_bytes=128,
+                scale_up_nthreads_limit=4,
+                scale_up_qsize_trigger=3,
+                scale_down_nempty_trigger=1,
+            ),
+        )
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="123",
+            auto_batch_tracing=True,
+            session=mock_session,
+            info=info,
+            tracing_sampling_rate=1.0,
+        )
+
+        run_id = uuid.uuid4()
+        client.create_run(
+            name="my_test_run",
+            run_type="llm",
+            inputs={"some_key": "some_val" * 1000},
+            id=run_id,
+            trace_id=run_id,
+            dotted_order=str(run_id),
+            extra={"metadata": {"user_id": "user-123"}},
+        )
+
+        if client.tracing_queue:
+            client.tracing_queue.join()
+        if client._futures is not None:
+            for fut in client._futures:
+                fut.result()
+
+    time.sleep(0.1)
+
+    post_calls = [
+        call_obj for call_obj in mock_session.request.mock_calls if call_obj.args and call_obj.args[0] == "POST"
+    ]
+    assert len(post_calls) >= 1, "Expected at least one POST to the compression endpoint"
+
+    call_data = post_calls[0][2]["data"]
+    if hasattr(call_data, "read"):
+        call_data = call_data.read()
+
+    decompressed = zstandard.ZstdDecompressor().decompress(call_data, max_output_size=10_000_000)
+    batch_data = parse_request_data(decompressed)
+    posted = [run for run in batch_data.get("post", []) if run.get("id") == str(run_id)]
+    assert len(posted) == 1
+    metadata = posted[0]["extra"]["metadata"]
+    assert metadata["ls_tracing_sample_rate"] == 1.0
+    assert metadata["user_id"] == "user-123"
+
+
+@patch("langsmith.client.requests.Session")
+def test_create_feedback_with_zstd_compression(mock_session_cls: mock.Mock) -> None:
+    """Test that feedback is sent using zstd compression when compression is enabled."""
+    # Prepare a mocked session
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    with patch.dict("os.environ", {}, clear=True):
+        info = ls_schemas.LangSmithInfo(
+            version="0.8.11",
+            instance_flags={"zstd_compression_enabled": True},
+            batch_ingest_config=ls_schemas.BatchIngestConfig(
+                use_multipart_endpoint=True,
+                size_limit=1,
+                size_limit_bytes=128,
+                scale_up_nthreads_limit=4,
+                scale_up_qsize_trigger=3,
+                scale_down_nempty_trigger=1,
+            ),
+        )
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="123",
+            auto_batch_tracing=True,
+            session=mock_session,
+            info=info,
+        )
+
+        # Create a few runs with larger payloads so there's something to compress
+        run_id = uuid.uuid4()
+
+        feedback_data = {
+            "comment": "test comment",
+            "score": 0.95,
+        }
+        client.create_feedback(run_id=run_id, key="test_key", trace_id=run_id, **feedback_data)
+
+        # Let the background threads flush
+        if client.tracing_queue:
+            client.tracing_queue.join()
+        if client._futures is not None:
+            for fut in client._futures:
+                fut.result()
+
+        time.sleep(0.1)
+
+    # Inspect the calls
+    post_calls = [
+        call_obj for call_obj in mock_session.request.mock_calls if call_obj.args and call_obj.args[0] == "POST"
+    ]
+    assert len(post_calls) == 1, "Expected exactly one POST request"
+
+    call_data = post_calls[0][2]["data"]
+    if hasattr(call_data, "read"):
+        call_data = call_data.read()
+
+    # Check for zstd magic bytes
+    zstd_magic = b"\x28\xb5\x2f\xfd"
+    assert call_data.startswith(zstd_magic), (
+        "Expected the request body to start with zstd magic bytes; it appears feedback was not compressed."
+    )
+
+    # Verify Content-Encoding header
+    headers = post_calls[0][2]["headers"]
+    assert headers.get("Content-Encoding") == "zstd", "Expected Content-Encoding header to be 'zstd'"
+
+
+@patch("langsmith.client.requests.Session")
+def test_create_run_without_compression_support(mock_session_cls: mock.Mock) -> None:
+    """Test that runs use regular multipart when server doesn't support compression."""
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    with patch.dict("os.environ", {}, clear=True):
+        info = ls_schemas.LangSmithInfo(
+            version="0.6.0",
+            instance_flags={},  # No compression flag
+            batch_ingest_config=ls_schemas.BatchIngestConfig(
+                use_multipart_endpoint=True,
+                size_limit=1,
+                size_limit_bytes=1024 * 1024 * 20,
+                scale_up_nthreads_limit=4,
+                scale_up_qsize_trigger=3,
+                scale_down_nempty_trigger=1,
+            ),
+        )
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="123",
+            auto_batch_tracing=True,
+            session=mock_session,
+            info=info,
+        )
+
+        run_id = uuid.uuid4()
+        inputs = {"key": "there"}
+        client.create_run(
+            name="test_run",
+            run_type="llm",
+            inputs=inputs,
+            id=run_id,
+            trace_id=run_id,
+            dotted_order=str(run_id),
+        )
+
+        outputs = {"key": "hi there"}
+
+        client.update_run(
+            run_id,
+            outputs=outputs,
+            end_time=datetime.now(timezone.utc),
+            trace_id=run_id,
+            dotted_order=str(run_id),
+        )
+
+        if client.tracing_queue:
+            client.tracing_queue.join()
+
+    time.sleep(0.1)
+
+    post_calls = [
+        call_obj for call_obj in mock_session.request.mock_calls if call_obj.args and call_obj.args[0] == "POST"
+    ]
+    assert len(post_calls) >= 1
+
+    payloads = [
+        (call[2]["headers"], call[2]["data"])
+        for call in mock_session.request.mock_calls
+        if call.args and call.args[1].endswith("runs/multipart")
+    ]
+    if not payloads:
+        assert False, "No payloads found"
+
+    parts: List[MultipartPart] = []
+    for payload in payloads:
+        headers, data = payload
+        assert headers["Content-Type"].startswith("multipart/form-data")
+        assert isinstance(data, bytes)
+        boundary = parse_options_header(headers["Content-Type"])[1]["boundary"]
+        parser = MultipartParser(io.BytesIO(data), boundary)
+        parts.extend(parser.parts())
+
+    assert [p.name for p in parts] == [
+        f"post.{run_id}",
+        f"post.{run_id}.inputs",
+        f"post.{run_id}.outputs",
+        f"post.{run_id}.extra",
+    ]
+    assert [p.headers.get("content-type") for p in parts] == [
+        "application/json",
+        "application/json",
+        "application/json",
+        "application/json",
+    ]
+
+    outputs_parsed = json.loads(parts[2].value)
+    assert outputs_parsed == outputs
+    inputs_parsed = json.loads(parts[1].value)
+    assert inputs_parsed == inputs
+    run_parsed = json.loads(parts[0].value)
+    assert run_parsed["trace_id"] == str(run_id)
+    assert run_parsed["dotted_order"] == str(run_id)
+
+
+@patch("langsmith.client.requests.Session")
+def test_create_run_with_disabled_compression(mock_session_cls: mock.Mock) -> None:
+    """Test that runs use regular multipart when compression is explicitly disabled."""
+
+    # Clear the cache to ensure the environment variable is re-evaluated
+    ls_utils.get_env_var.cache_clear()
+
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    with patch.dict("os.environ", {"LANGSMITH_DISABLE_RUN_COMPRESSION": "true"}, clear=True):
+        info = ls_schemas.LangSmithInfo(
+            version="0.6.0",
+            instance_flags={"zstd_compression_enabled": True},  # Enabled on server
+            batch_ingest_config=ls_schemas.BatchIngestConfig(
+                use_multipart_endpoint=True,
+                size_limit=1,
+                size_limit_bytes=1024 * 1024 * 20,
+                scale_up_nthreads_limit=4,
+                scale_up_qsize_trigger=3,
+                scale_down_nempty_trigger=1,
+            ),
+        )
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="123",
+            auto_batch_tracing=True,
+            session=mock_session,
+            info=info,
+        )
+
+        run_id = uuid.uuid4()
+        inputs = {"key": "there"}
+        client.create_run(
+            name="test_run",
+            run_type="llm",
+            inputs=inputs,
+            id=run_id,
+            trace_id=run_id,
+            dotted_order=str(run_id),
+        )
+
+        outputs = {"key": "hi there"}
+        client.update_run(
+            run_id,
+            outputs=outputs,
+            end_time=datetime.now(timezone.utc),
+            trace_id=run_id,
+            dotted_order=str(run_id),
+        )
+
+        # Let the background threads flush
+        if client.tracing_queue:
+            client.tracing_queue.join()
+
+    time.sleep(0.1)
+
+    post_calls = [
+        call_obj for call_obj in mock_session.request.mock_calls if call_obj.args and call_obj.args[0] == "POST"
+    ]
+    assert len(post_calls) >= 1
+
+    payloads = [
+        (call[2]["headers"], call[2]["data"])
+        for call in mock_session.request.mock_calls
+        if call.args and call.args[1].endswith("runs/multipart")
+    ]
+    if not payloads:
+        assert False, "No payloads found"
+
+    parts: List[MultipartPart] = []
+    for payload in payloads:
+        headers, data = payload
+        assert headers["Content-Type"].startswith("multipart/form-data")
+        assert isinstance(data, bytes)
+        boundary = parse_options_header(headers["Content-Type"])[1]["boundary"]
+        parser = MultipartParser(io.BytesIO(data), boundary)
+        parts.extend(parser.parts())
+
+    assert [p.name for p in parts] == [
+        f"post.{run_id}",
+        f"post.{run_id}.inputs",
+        f"post.{run_id}.outputs",
+        f"post.{run_id}.extra",
+    ]
+    assert [p.headers.get("content-type") for p in parts] == [
+        "application/json",
+        "application/json",
+        "application/json",
+        "application/json",
+    ]
+
+    outputs_parsed = json.loads(parts[2].value)
+    assert outputs_parsed == outputs
+    inputs_parsed = json.loads(parts[1].value)
+    assert inputs_parsed == inputs
+    run_parsed = json.loads(parts[0].value)
+    assert run_parsed["trace_id"] == str(run_id)
+    assert run_parsed["dotted_order"] == str(run_id)
+
+
+@patch("langsmith.client.requests.Session")
+def test_max_batch_size_bytes_override(mock_session_cls: mock.Mock) -> None:
+    """Test that client._max_batch_size_bytes overrides default size_limit_bytes."""
+    # Clear the cache to ensure the environment variable is re-evaluated
+    ls_utils.get_env_var.cache_clear()
+
+    # Prepare a mocked session
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_session.request.return_value = mock_response
+    mock_session_cls.return_value = mock_session
+
+    with patch.dict(
+        "os.environ",
+        {
+            "LANGSMITH_DISABLE_RUN_COMPRESSION": "true",
+        },
+        clear=True,
+    ):
+        info = ls_schemas.LangSmithInfo(
+            version="0.6.0",
+            instance_flags={"zstd_compression_enabled": True},
+            batch_ingest_config=ls_schemas.BatchIngestConfig(
+                use_multipart_endpoint=True,
+                size_limit=100,  # High limit so we trigger size_limit_bytes first
+                size_limit_bytes=20_971_520,  # Default 20MB - would normally not trigger
+                scale_up_nthreads_limit=4,
+                scale_up_qsize_trigger=3,
+                scale_down_nempty_trigger=1,
+            ),
+        )
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="123",
+            auto_batch_tracing=True,
+            session=mock_session,
+            info=info,
+            # Set custom max_batch_size_bytes to a tiny value (200 bytes)
+            max_batch_size_bytes=200,
+        )
+
+        # Create many runs concurrently to trigger multiple background threads
+        import threading
+        import time
+
+        def create_runs_batch(start_idx, count):
+            for i in range(start_idx, start_idx + count):
+                run_id = uuid.uuid4()
+                client.create_run(
+                    name=f"test_run_{i}",
+                    run_type="llm",
+                    inputs={"large_data": "x" * 1024},  # 1KB per run, well over 200 byte limit
+                    id=run_id,
+                    trace_id=run_id,
+                    dotted_order=str(run_id),
+                )
+                # Small delay to allow queue to build up and trigger thread scaling
+                time.sleep(0.001)
+
+        # Create 10 threads with 10 runs each (100 total)
+        threads = []
+        for batch_start in range(0, 100, 10):  # 10 threads, 10 runs each
+            thread = threading.Thread(target=create_runs_batch, args=(batch_start, 10))
+            threads.append(thread)
+            thread.start()
+
+        # Wait for all creation threads to complete
+        for thread in threads:
+            thread.join()
+
+        # Let the background threads flush
+        if client.tracing_queue:
+            client.tracing_queue.join()
+        if client._futures is not None:
+            for fut in client._futures:
+                fut.result()
+
+    # Sleep for a time period less than the batch timeout
+    time.sleep(0.1)
+
+    # Verify that compressed multipart requests were made
+    # The small size limit should have triggered multiple batches
+    post_calls = [
+        call_obj
+        for call_obj in mock_session.request.mock_calls
+        if call_obj.args and call_obj.args[0] == "POST" and call_obj.args[1].endswith("runs/multipart")
+    ]
+
+    # Should have made one POST per run due to size limit being exceeded
+    # Each run (~1KB) is much larger than the 200 byte limit
+    # With the bug fix and optimization, each run should trigger its own flush
+    assert len(post_calls) == 100  # Expect exactly 100 requests for 100 runs
+
+    # Verify the Content-Encoding is zstd (compression was used)
+    found_zstd = False
+    for call in post_calls:
+        if "headers" in call.kwargs:
+            headers = call.kwargs["headers"]
+            if headers.get("Content-Encoding") == "zstd":
+                found_zstd = True
+                break
+
+    assert not found_zstd, "Expected no zstd compressed request"
+
+
+def test__dataset_examples_path():
+    dataset_id = "123"
+    api_url = "https://foobar.com/api"
+    expected = "https://foobar.com/api/v1/platform/datasets/123/examples"
+    for suffix in ("", "/", "/v1", "/v1/"):
+        path = _dataset_examples_path(api_url + suffix, dataset_id)
+        actual = (api_url + suffix).rstrip("/") + path
+        assert expected == actual
+
+
+def test_compressed_traces_queue_limit_drops_new_items(
+    caplog: pytest.LogCaptureFixture,
+):
+    """Ensure compressed traces queue enforces a max in-memory size and logs drops."""
+    from langsmith.client import _reset_tracing_drop_log
+
+    _reset_tracing_drop_log()
+
+    from langsmith._internal._compressed_traces import CompressedTraces
+    from langsmith._internal._multipart import MultipartPartsAndContext
+    from langsmith._internal._operations import compress_multipart_parts_and_context
+
+    _clear_env_cache()
+    # Set a very small max ingest memory to force drops.
+    with patch.dict(
+        os.environ,
+        {
+            "LANGSMITH_MAX_INGEST_MEMORY_BYTES": "100",
+        },
+        clear=False,
+    ):
+        compressed_traces = CompressedTraces()
+
+    boundary = "test_boundary"
+
+    # First operation: 60 bytes, should be accepted.
+    parts1 = MultipartPartsAndContext(
+        parts=[
+            (
+                "post.run1",
+                (
+                    None,
+                    b"x" * 60,
+                    "application/json",
+                    {},
+                ),
+            )
+        ],
+        context="trace=trace1,id=run1",
+    )
+
+    enqueued1 = compress_multipart_parts_and_context(parts1, compressed_traces, boundary)
+    assert enqueued1
+    assert compressed_traces.uncompressed_size == 60
+    assert compressed_traces._context == ["trace=trace1,id=run1"]
+
+    # Second operation: another 60 bytes. With current size=60 and limit=100,
+    # this should be dropped and log a warning.
+    parts2 = MultipartPartsAndContext(
+        parts=[
+            (
+                "post.run2",
+                (
+                    None,
+                    b"y" * 60,
+                    "application/json",
+                    {},
+                ),
+            )
+        ],
+        context="trace=trace2,id=run2",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        enqueued2 = compress_multipart_parts_and_context(parts2, compressed_traces, boundary)
+
+    assert not enqueued2
+    # Size and context should be unchanged after a rejected operation.
+    assert compressed_traces.uncompressed_size == 60
+    assert compressed_traces._context == ["trace=trace1,id=run1"]
+
+    # Verify we logged a clear warning about dropping the trace.
+    assert any(
+        "Dropped" in record.getMessage() and "compressed traces buffer full" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@mock.patch("langsmith.client._tracing_control_thread_func")
+def test_tracing_queue_limit_drops_when_full(
+    mock_tracing_thread: mock.Mock,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Ensure the uncompressed tracing queue drops items when full.
+
+    The background drain thread is patched to a no-op so it can't pull items
+    off the queue while we fill it to capacity; otherwise ``qsize()`` races the
+    drainer and is non-deterministic under load.
+    """
+    from langsmith._internal._background_thread import TracingQueueItem
+    from langsmith._internal._operations import SerializedFeedbackOperation
+    from langsmith.client import _reset_tracing_drop_log
+
+    _reset_tracing_drop_log()
+
+    _clear_env_cache()
+    with patch.dict(
+        os.environ,
+        {
+            "LANGSMITH_API_KEY": "test-key",
+            "LANGSMITH_TRACING_QUEUE_MAX_SIZE": "3",
+        },
+        clear=False,
+    ):
+        client = Client(auto_batch_tracing=True)
+
+    assert client.tracing_queue is not None
+    assert client.tracing_queue.maxsize == 3
+
+    def _make_item(priority: str) -> TracingQueueItem:
+        op = SerializedFeedbackOperation(id=uuid.uuid4(), trace_id=uuid.uuid4(), feedback=b"test")
+        return TracingQueueItem(priority, op)
+
+    # Fill the queue to capacity.
+    client._put_tracing_queue(_make_item("a"))
+    client._put_tracing_queue(_make_item("b"))
+    client._put_tracing_queue(_make_item("c"))
+    assert client.tracing_queue.qsize() == 3
+
+    # This should be dropped with a warning.
+    with caplog.at_level(logging.WARNING):
+        client._put_tracing_queue(_make_item("d"))
+
+    assert client.tracing_queue.qsize() == 3
+    assert any(
+        "Dropped" in record.getMessage() and "tracing queue full" in record.getMessage() for record in caplog.records
+    )
+    # The drain thread is disabled, so the enqueued items are never marked
+    # done; skip the flush/join (timeout=0) so cleanup doesn't block on them.
+    client.cleanup(timeout=0)
+
+
+def test_tracing_queue_default_maxsize():
+    """Ensure the default maxsize is applied."""
+    from langsmith._internal._constants import _TRACING_QUEUE_MAX_SIZE
+
+    _clear_env_cache()
+    with patch.dict(
+        os.environ,
+        {"LANGSMITH_API_KEY": "test-key"},
+        clear=False,
+    ):
+        client = Client(auto_batch_tracing=True)
+
+    assert client.tracing_queue is not None
+    assert client.tracing_queue.maxsize == _TRACING_QUEUE_MAX_SIZE
+    client.cleanup()
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_list_shared_examples_pagination(mock_session_cls: mock.Mock) -> None:
+    """Test list_shared_examples handles pagination correctly."""
+    mock_session = mock.Mock()
+
+    def mock_request(*args, **kwargs):
+        response = mock.Mock()
+        response.status_code = 200
+
+        if "/info" in args[1]:
+            response.json.return_value = {}
+            return response
+
+        # First request will return 100 examples, second request 50 examples
+        if kwargs.get("params", {}).get("offset", 0) == 0:
+            examples = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "created_at": _CREATED_AT.isoformat(),
+                    "inputs": {"text": f"input_{i}"},
+                    "outputs": {"result": f"output_{i}"},
+                    "dataset_id": str(uuid.uuid4()),
+                }
+                for i in range(100)
+            ]
+        else:
+            examples = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "created_at": _CREATED_AT.isoformat(),
+                    "inputs": {"text": f"input_{i}"},
+                    "outputs": {"result": f"output_{i}"},
+                    "dataset_id": str(uuid.uuid4()),
+                }
+                for i in range(100, 150)
+            ]
+
+        response.json.return_value = examples
+        return response
+
+    mock_session.request.side_effect = mock_request
+    mock_session_cls.return_value = mock_session
+
+    client = Client(api_url="http://localhost:1984", api_key="fake-key", session=mock_session)
+    examples = list(client.list_shared_examples(str(uuid.uuid4())))
+
+    assert len(examples) == 150  # Should get all examples
+    assert examples[0].inputs["text"] == "input_0"
+    assert examples[149].inputs["text"] == "input_149"
+
+
+@mock.patch("langsmith.client.requests.get")
+def test__convert_stored_attachments_to_attachments_dict(mock_get: mock.Mock):
+    """Test URL construction in attachment downloading."""
+    # Mock the requests.get response
+    mock_response = mock.Mock()
+    mock_response.content = b"test attachment data"
+    mock_response.raise_for_status.return_value = None
+    mock_get.return_value = mock_response
+
+    # Test case 1: api_url=None (existing behavior - presigned_url is already complete URL)
+    data_with_complete_url = {
+        "attachment_urls": {
+            "attachment.test_file": {
+                "presigned_url": "https://foobar.com/bucket/file.txt?signature=xyz",
+                "mime_type": "text/plain",
+            }
+        }
+    }
+
+    result = _convert_stored_attachments_to_attachments_dict(
+        data_with_complete_url, attachments_key="attachment_urls", api_url=None
+    )
+
+    assert "test_file" in result
+    assert result["test_file"]["presigned_url"] == "https://foobar.com/bucket/file.txt?signature=xyz"
+    assert result["test_file"]["mime_type"] == "text/plain"
+    assert result["test_file"]["reader"].read() == b"test attachment data"
+
+    # Verify requests.get was called with the complete URL as-is
+    mock_get.assert_called_with("https://foobar.com/bucket/file.txt?signature=xyz", stream=True)
+
+    # Reset mock for next test case
+    mock_get.reset_mock()
+    mock_response.content = b"test attachment data 2"
+
+    # Test case 2: api_url provided (new behavior - constructs full URL from API base + path)
+    data_with_relative_url = {
+        "attachment_urls": {
+            "attachment.test_file2": {
+                "presigned_url": "/api/public/download?jwt=abc123",
+                "mime_type": "image/png",
+            }
+        }
+    }
+
+    result = _convert_stored_attachments_to_attachments_dict(
+        data_with_relative_url,
+        attachments_key="attachment_urls",
+        api_url="https://api.langsmith.com",
+    )
+
+    assert "test_file2" in result
+    assert result["test_file2"]["presigned_url"] == "/api/public/download?jwt=abc123"  # Original preserved
+    assert result["test_file2"]["mime_type"] == "image/png"
+    assert result["test_file2"]["reader"].read() == b"test attachment data 2"
+
+    # Verify requests.get was called with the constructed full URL
+    mock_get.assert_called_with("https://api.langsmith.com/api/public/download?jwt=abc123", stream=True)
+
+    # Reset mock for edge case test
+    mock_get.reset_mock()
+
+    # Test case 3: Edge case - api_url provided but presigned_url is already complete URL
+    data_with_complete_url_edge_case = {
+        "attachment_urls": {
+            "attachment.test_file3": {
+                "presigned_url": "https://example.foobar.com/file.jpg?token=456",
+                "mime_type": "image/jpeg",
+            }
+        }
+    }
+
+    result = _convert_stored_attachments_to_attachments_dict(
+        data_with_complete_url_edge_case,
+        attachments_key="attachment_urls",
+        api_url="https://api.langsmith.com",
+    )
+
+    assert "test_file3" in result
+    # Verify requests.get was called with the complete URL unchanged
+    mock_get.assert_called_with("https://example.foobar.com/file.jpg?token=456", stream=True)
+
+    # Test case 4: No attachments key present
+    data_no_attachments = {}
+    result = _convert_stored_attachments_to_attachments_dict(
+        data_no_attachments,
+        attachments_key="attachment_urls",
+        api_url="https://api.langsmith.com",
+    )
+    assert result == {}
+
+    # Test case 5: Empty attachments
+    data_empty_attachments = {"attachment_urls": {}}
+    result = _convert_stored_attachments_to_attachments_dict(
+        data_empty_attachments,
+        attachments_key="attachment_urls",
+        api_url="https://api.langsmith.com",
+    )
+    assert result == {}
+
+    # Test case 6: Attachments without "attachment." prefix are ignored
+    data_mixed_keys = {
+        "attachment_urls": {
+            "attachment.valid_file": {
+                "presigned_url": "/download/valid",
+                "mime_type": "text/plain",
+            },
+            "invalid_file": {
+                "presigned_url": "/download/invalid",
+                "mime_type": "text/plain",
+            },
+        }
+    }
+
+    mock_get.reset_mock()
+    result = _convert_stored_attachments_to_attachments_dict(
+        data_mixed_keys,
+        attachments_key="attachment_urls",
+        api_url="https://api.langsmith.com",
+    )
+
+    assert "valid_file" in result
+    assert "invalid_file" not in result
+    # Only valid attachment should trigger a request
+    mock_get.assert_called_once_with("https://api.langsmith.com/download/valid", stream=True)
+
+    # Test case 7: Self-hosted backend with relative presigned_url
+    mock_get.reset_mock()
+    mock_response.content = b"self-hosted attachment data"
+
+    data_self_hosted = {
+        "s3_urls": {
+            "attachment.testimage": {
+                "presigned_url": "/public/download?jwt=test.jwt.token",
+                "s3_url": "ttl_s/attachments/test-path/test-file-id",
+            }
+        }
+    }
+
+    result = _convert_stored_attachments_to_attachments_dict(
+        data_self_hosted,
+        attachments_key="s3_urls",
+        api_url="https://self-hosted.example.com",
+    )
+
+    assert "testimage" in result
+    assert result["testimage"]["presigned_url"] == "/public/download?jwt=test.jwt.token"
+    assert result["testimage"]["reader"].read() == b"self-hosted attachment data"
+    # Verify the URL was constructed correctly
+    mock_get.assert_called_with(
+        "https://self-hosted.example.com/public/download?jwt=test.jwt.token",
+        stream=True,
+    )
+
+    # Test case 8: Download failure - should raise error when reading
+    mock_get.reset_mock()
+    mock_get.side_effect = requests.RequestException("Network error")
+
+    data_with_error = {
+        "attachment_urls": {
+            "attachment.failing_file": {
+                "presigned_url": "https://example.com/failing.txt",
+                "mime_type": "text/plain",
+            }
+        }
+    }
+
+    result = _convert_stored_attachments_to_attachments_dict(
+        data_with_error, attachments_key="attachment_urls", api_url=None
+    )
+
+    assert "failing_file" in result
+    assert result["failing_file"]["presigned_url"] == "https://example.com/failing.txt"
+    assert result["failing_file"]["mime_type"] == "text/plain"
+    # Reading the failed attachment should raise an error
+    with pytest.raises(ls_utils.LangSmithError, match="Failed to download attachment"):
+        result["failing_file"]["reader"].read()
+
+
+def test_workspace_validation_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that workspace is optional when API key is present."""
+    _clear_env_cache()
+
+    # clear env variables
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    monkeypatch.delenv("LANGSMITH_WORKSPACE_ID", raising=False)
+
+    # Test 1: API key without workspace should succeed (backward compatibility)
+    client = Client(api_key="test-key", auto_batch_tracing=False)
+    assert client.workspace_id is None
+
+    # Test 2: API key with workspace_id should succeed
+    client = Client(api_key="test-key", workspace_id="test-workspace-id", auto_batch_tracing=False)
+    assert client.workspace_id == "test-workspace-id"
+
+
+def test_workspace_headers_injection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that workspace headers are properly injected."""
+    _clear_env_cache()
+
+    # env setup
+    monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
+    monkeypatch.setenv("LANGSMITH_WORKSPACE_ID", "test-workspace-id")
+
+    client = Client(auto_batch_tracing=False)
+    headers = client._compute_headers()
+
+    # check headers
+    assert "X-Tenant-Id" in headers
+
+
+def test_workspace_validation_for_org_scoped_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that workspace validation is called for org-scoped keys."""
+    _clear_env_cache()
+
+
+class TestEndToEndWorkspaceFlow:
+    """Comprehensive end-to-end tests for workspace functionality."""
+
+    def test_successful_api_call_with_workspace_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test complete flow: client creation -> API call -> headers verification."""
+        _clear_env_cache()
+
+        # env setup
+        monkeypatch.setenv("LANGSMITH_API_KEY", "test-api-key")
+        monkeypatch.setenv("LANGSMITH_WORKSPACE_ID", "test-workspace-id")
+
+        client = Client(auto_batch_tracing=False)
+
+        # mock session for API call
+        with mock.patch.object(client.session, "request") as mock_request:
+            # Set up successful response
+            mock_response = mock.MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"id": "run-123", "name": "test-run"}
+            mock_request.return_value = mock_response
+
+            # API call
+            client.create_run(name="test-run", run_type="llm", inputs={"text": "hello"})
+
+            # HTTP call made with correct headers
+            mock_request.assert_called_once()
+            call_args = mock_request.call_args
+
+            headers = call_args[1]["headers"]
+            assert headers["X-Tenant-Id"] == "test-workspace-id"
+            assert headers["x-api-key"] == "test-api-key"
+
+            assert call_args[0][0] == "POST"
+            assert "/runs" in call_args[0][1]
+
+    def test_org_scoped_key_error_flow(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test complete flow: org-scoped key without workspace -> error detection -> validation error."""
+        _clear_env_cache()
+
+        client = Client(api_key="org-scoped-key", auto_batch_tracing=False)
+
+        # mock session to return error
+        with mock.patch.object(client.session, "request") as mock_request:
+            mock_response = mock.MagicMock()
+            mock_response.status_code = 403
+            mock_response.json.return_value = {"error": "org_scoped_key_requires_workspace"}
+            mock_response.text = '{"error":"org_scoped_key_requires_workspace"}'
+            mock_response.raise_for_status.side_effect = HTTPError("403 Client Error")
+            mock_request.return_value = mock_response
+
+            # try API call - should fail due to error
+            with pytest.raises(
+                ls_utils.LangSmithUserError,
+                match="This API key is org-scoped and requires workspace specification",
+            ):
+                client.create_run(name="test-run", run_type="llm", inputs={"text": "hello"})
+
+            mock_request.assert_called_once()
+
+            # check that no workspace header was sent
+            call_args = mock_request.call_args
+            headers = call_args[1]["headers"]
+            assert "X-Tenant-Id" not in headers
+
+    def test_other_403_error_flow(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that other 403 errors don't trigger workspace validation."""
+        _clear_env_cache()
+
+        client = Client(api_key="test-key", auto_batch_tracing=False)
+
+        # mock session to return diff error
+        with mock.patch.object(client.session, "request") as mock_request:
+            mock_response = mock.MagicMock()
+            mock_response.status_code = 403
+            mock_response.json.return_value = {"error": "insufficient_permissions"}
+            mock_response.text = "insufficient_permissions"
+            mock_response.raise_for_status.side_effect = HTTPError("403 Client Error")
+            mock_request.return_value = mock_response
+
+            # try API call - should fail but not bc of workspace validation
+            with pytest.raises(ls_utils.LangSmithError, match="Failed to POST"):
+                client.create_run(name="test-run", run_type="llm", inputs={"text": "hello"})
+
+            mock_request.assert_called_once()
+
+    def test_multiple_api_calls_different_workspaces(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test multiple API calls with different workspace configurations."""
+        _clear_env_cache()
+
+        # default workspace setup
+        monkeypatch.setenv("LANGSMITH_API_KEY", "test-api-key")
+        monkeypatch.setenv("LANGSMITH_WORKSPACE_ID", "default-workspace-id")
+
+        client = Client(auto_batch_tracing=False)
+
+        # mock requests.Session
+        with mock.patch("requests.Session.request") as mock_request:
+            mock_response = mock.MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"id": "run-123", "name": "test-run"}
+            mock_request.return_value = mock_response
+
+            # first call uses default workspace
+            client.create_run(name="test-run-1", run_type="llm", inputs={"text": "hello"})
+
+            # override for second call
+            client.workspace_id = "override-workspace-id"
+
+            client.create_run(name="test-run-2", run_type="llm", inputs={"text": "world"})
+
+            # check both calls
+            assert mock_request.call_count == 2
+
+            # check first call was default
+            first_call_args = mock_request.call_args_list[0]
+            first_headers = first_call_args[1]["headers"]
+            assert first_headers["X-Tenant-Id"] == "default-workspace-id"
+
+            # check second call was overridden
+            second_call_args = mock_request.call_args_list[1]
+            second_headers = second_call_args[1]["headers"]
+            assert second_headers["X-Tenant-Id"] == "override-workspace-id"
+
+    def test_environment_variable_priority(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that config workspace_id takes priority over environment variable."""
+        _clear_env_cache()
+
+        # env var setup
+        monkeypatch.setenv("LANGSMITH_API_KEY", "test-api-key")
+        monkeypatch.setenv("LANGSMITH_WORKSPACE_ID", "env-workspace-id")
+
+        client = Client(workspace_id="config-workspace-id", auto_batch_tracing=False)
+
+        # mock requests.Session
+        with mock.patch("requests.Session.request") as mock_request:
+            # Set up successful response
+            mock_response = mock.MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"id": "run-123", "name": "test-run"}
+            mock_request.return_value = mock_response
+
+            # API call
+            client.create_run(name="test-run", run_type="llm", inputs={"text": "hello"})
+
+            # HTTP call made with config workspace header
+            mock_request.assert_called_once()
+            call_args = mock_request.call_args
+            headers = call_args[1]["headers"]
+            assert headers["X-Tenant-Id"] == "config-workspace-id"
+
+    def test_workspace_id_none_empty_handling(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test handling of None and empty workspace_id values."""
+        _clear_env_cache()
+
+        # test with None workspace_id
+        client = Client(api_key="test-key", workspace_id=None, auto_batch_tracing=False)
+        headers = client._compute_headers()
+        assert "X-Tenant-Id" not in headers
+
+        # test with empty workspace_id
+        client = Client(api_key="test-key", workspace_id="", auto_batch_tracing=False)
+        headers = client._compute_headers()
+        assert "X-Tenant-Id" not in headers
+
+    def test_workspace_error_recovery_flow(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test recovery from org-scoped key error by providing workspace."""
+        _clear_env_cache()
+        monkeypatch.delenv("LANGSMITH_TRACING_SAMPLING_RATE", raising=False)
+        monkeypatch.delenv("LANGCHAIN_TRACING_SAMPLING_RATE", raising=False)
+
+        client = Client(api_key="org-scoped-key", auto_batch_tracing=False)
+
+        with mock.patch.object(client.session, "request") as mock_request:
+            # org-scoped error
+            mock_response_error = mock.MagicMock()
+            mock_response_error.status_code = 403
+            mock_response_error.json.return_value = {"error": "org_scoped_key_requires_workspace"}
+            mock_response_error.text = '{"error":"org_scoped_key_requires_workspace"}'
+            mock_response_error.raise_for_status.side_effect = HTTPError("403 Client Error")
+
+            # success
+            mock_response_success = mock.MagicMock()
+            mock_response_success.status_code = 200
+            mock_response_success.json.return_value = {
+                "id": "run-123",
+                "name": "test-run",
+            }
+
+            mock_request.side_effect = [mock_response_error, mock_response_success]
+
+            # fail bc of org-scoped error
+            with pytest.raises(
+                ls_utils.LangSmithUserError,
+                match="This API key is org-scoped and requires workspace specification",
+            ):
+                client.create_run(name="test-run", run_type="llm", inputs={"text": "hello"})
+
+            # set workspace_id for second call
+            client.workspace_id = "test-workspace-id"
+
+            # succeeds
+            client.create_run(name="test-run", run_type="llm", inputs={"text": "hello"})
+
+            assert mock_request.call_count == 2
+
+            # check that second call had workspace header
+            second_call_args = mock_request.call_args_list[1]
+            second_headers = second_call_args[1]["headers"]
+            assert second_headers["X-Tenant-Id"] == "test-workspace-id"
+
+
+@pytest.mark.parametrize(
+    "api_url,pathname,expected",
+    [
+        # Test absolute URLs in pathname
+        (
+            "https://api.smith.langchain.com",
+            "https://example.com/path",
+            "https://example.com/path",
+        ),
+        # Test empty pathname
+        ("https://api.smith.langchain.com", "", "https://api.smith.langchain.com"),
+        # Test regular paths
+        (
+            "https://api.smith.langchain.com",
+            "/v1/stuff",
+            "https://api.smith.langchain.com/v1/stuff",
+        ),
+        (
+            "https://api.smith.langchain.com/",
+            "/v1/stuff",
+            "https://api.smith.langchain.com/v1/stuff",
+        ),
+        # Test with 'api' in pathname
+        (
+            "https://api.smith.langchain.com",
+            "/api/v1/stuff",
+            "https://api.smith.langchain.com/api/v1/stuff",
+        ),
+        # Standard API URL: https://api.smith.langchain.com
+        (
+            "https://api.smith.langchain.com",
+            "/v1/stuff",
+            "https://api.smith.langchain.com/v1/stuff",
+        ),
+        (
+            "https://api.smith.langchain.com",
+            "/api/v1/stuff",
+            "https://api.smith.langchain.com/api/v1/stuff",
+        ),
+        # API URL with /api: https://api.smith.langchain.com/api
+        (
+            "https://api.smith.langchain.com/api",
+            "/v1/stuff",
+            "https://api.smith.langchain.com/api/v1/stuff",
+        ),
+        (
+            "https://api.smith.langchain.com/api",
+            "/api/v1/stuff",
+            "https://api.smith.langchain.com/api/v1/stuff",
+        ),
+        # API URL with /api/v1: https://api.smith.langchain.com/api/v1
+        (
+            "https://api.smith.langchain.com/api/v1",
+            "/runs",
+            "https://api.smith.langchain.com/api/v1/runs",
+        ),
+        (
+            "https://api.smith.langchain.com/api/v1",
+            "/api/runs",
+            "https://api.smith.langchain.com/api/runs",
+        ),
+        # Self-hosted API URL with /api: https://self-hosted.smith.langchain.com/api
+        (
+            "https://self-hosted.smith.langchain.com/api",
+            "/v1/stuff",
+            "https://self-hosted.smith.langchain.com/api/v1/stuff",
+        ),
+        (
+            "https://self-hosted.smith.langchain.com/api",
+            "/api/v1/stuff",
+            "https://self-hosted.smith.langchain.com/api/v1/stuff",
+        ),
+        # Self-hosted API URL with /api/v1: https://self-hosted.smith.langchain.com/api/v1
+        (
+            "https://self-hosted.smith.langchain.com/api/v1",
+            "/runs",
+            "https://self-hosted.smith.langchain.com/api/v1/runs",
+        ),
+        (
+            "https://self-hosted.smith.langchain.com/api/v1",
+            "/api/runs",
+            "https://self-hosted.smith.langchain.com/api/runs",
+        ),
+    ],
+)
+def test_construct_url(api_url, pathname, expected):
+    """Test _construct_url with various combinations of API URLs and pathnames."""
+    result = _construct_url(api_url, pathname)
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    "api_url,pathname,error_match",
+    [
+        (
+            "",
+            "/some/path",
+            "api_url must start with 'http://'",
+        ),
+    ],
+)
+def test_construct_url_errors(api_url, pathname, error_match):
+    """Test error cases for _construct_url."""
+    with pytest.raises(ValueError, match=error_match):
+        _construct_url(api_url, pathname)
+
+
+@pytest.mark.parametrize(
+    "api_url,expected",
+    [
+        # Cloud API URL: the /api/v1 suffix is stripped so the generated client
+        # can append its own /api/v2/... path segments.
+        (
+            "https://api.smith.langchain.com/api/v1",
+            "https://api.smith.langchain.com",
+        ),
+        # httpx stringifies base_url with a trailing slash.
+        (
+            "https://api.smith.langchain.com/api/v1/",
+            "https://api.smith.langchain.com",
+        ),
+        # A bare /v1 suffix (no /api prefix) is not stripped.
+        (
+            "https://api.smith.langchain.com/v1",
+            "https://api.smith.langchain.com/v1",
+        ),
+        ("https://api.smith.langchain.com/v1/", "https://api.smith.langchain.com/v1"),
+        (
+            "https://self-hosted.example.com/langsmith/v1",
+            "https://self-hosted.example.com/langsmith/v1",
+        ),
+        # Self-hosted deployments under a path prefix.
+        (
+            "https://self-hosted.example.com/langsmith/api/v1",
+            "https://self-hosted.example.com/langsmith",
+        ),
+        # Bare /api suffix (no version segment).
+        ("https://api.smith.langchain.com/api", "https://api.smith.langchain.com"),
+        ("https://api.smith.langchain.com/api/", "https://api.smith.langchain.com"),
+        (
+            "https://self-hosted.example.com/api",
+            "https://self-hosted.example.com",
+        ),
+        (
+            "https://self-hosted.example.com/langsmith/api",
+            "https://self-hosted.example.com/langsmith",
+        ),
+        # No /api suffix: left unchanged (aside from trailing slashes).
+        ("https://api.smith.langchain.com", "https://api.smith.langchain.com"),
+        ("https://api.smith.langchain.com/", "https://api.smith.langchain.com"),
+        ("http://localhost:1984", "http://localhost:1984"),
+        ("http://localhost:1984/api/v1", "http://localhost:1984"),
+        # /api must be a trailing path segment, not a substring.
+        (
+            "https://api.smith.langchain.com/api/runs",
+            "https://api.smith.langchain.com/api/runs",
+        ),
+        ("https://api.example.com", "https://api.example.com"),
+    ],
+)
+def test_get_openapi_base_url(api_url: str, expected: str) -> None:
+    """Test _get_openapi_base_url strips the handwritten client's /api[/v1] suffix."""
+    assert _get_openapi_base_url(api_url) == expected
+
+
+@pytest.mark.parametrize(
+    "api_url,expected_base_url",
+    [
+        ("https://api.smith.langchain.com/api/v1", "https://api.smith.langchain.com"),
+        ("http://localhost:1984", "http://localhost:1984"),
+    ],
+)
+def test_get_langsmith_api_uses_normalized_base_url(api_url: str, expected_base_url: str) -> None:
+    """The generated OpenAPI client must not receive the /api/v1 suffix."""
+    client = Client(api_url=api_url, api_key="test-api-key", auto_batch_tracing=False)
+    openapi_client = client._get_langsmith_api()
+    assert str(openapi_client.base_url).rstrip("/") == expected_base_url
+
+
+@pytest.mark.parametrize(
+    "api_url,expected_base_url",
+    [
+        ("https://api.smith.langchain.com/api/v1", "https://api.smith.langchain.com"),
+        ("http://localhost:1984", "http://localhost:1984"),
+    ],
+)
+def test_get_langsmith_api_sync_uses_normalized_base_url(api_url: str, expected_base_url: str) -> None:
+    """The sync accessor must normalize its base URL like the async one."""
+    client = Client(api_url=api_url, api_key="test-api-key", auto_batch_tracing=False)
+    openapi_client = client._get_langsmith_api_sync()
+    assert str(openapi_client.base_url).rstrip("/") == expected_base_url
+
+
+@pytest.mark.parametrize(
+    "api_url,expected_base_url",
+    [
+        ("https://api.smith.langchain.com/api/v1", "https://api.smith.langchain.com"),
+        ("http://localhost:1984", "http://localhost:1984"),
+    ],
+)
+def test_async_client_uses_normalized_base_url(api_url: str, expected_base_url: str) -> None:
+    """The async client normalizes its httpx base_url before the generated client."""
+    from langsmith.async_client import AsyncClient
+
+    client = AsyncClient(api_url=api_url, api_key="test-api-key")
+    assert str(client._langsmith_api.base_url).rstrip("/") == expected_base_url
+
+
+def test_httpx_kwargs_from_session_translates_transport_config() -> None:
+    """A caller-supplied session's transport config carries over to httpx."""
+    session = requests.Session()
+    session.headers["X-Custom"] = "custom-value"
+    session.cookies.set("cookie-name", "cookie-value")
+    session.verify = "/path/to/ca-bundle.pem"
+    session.cert = ("/path/to/client.crt", "/path/to/client.key")
+    session.proxies = {"https": "http://proxy.internal:8080"}
+    session.trust_env = False
+
+    kwargs = _httpx_kwargs_from_session(session)
+
+    assert kwargs["headers"] == {"X-Custom": "custom-value"}
+    assert kwargs["cookies"] is session.cookies
+    assert kwargs["verify"] == "/path/to/ca-bundle.pem"
+    assert kwargs["cert"] == ("/path/to/client.crt", "/path/to/client.key")
+    assert kwargs["trust_env"] is False
+    # httpx renamed `proxies` to `proxy` in 0.26; either name is accepted here.
+    proxy_kwarg = "proxy" if "proxy" in inspect.signature(httpx.Client.__init__).parameters else "proxies"
+    assert kwargs[proxy_kwarg] == "http://proxy.internal:8080"
+    # Whichever name this httpx accepts, the kwargs must be usable as-is.
+    httpx.Client(**{**kwargs, "verify": False, "cert": None}).close()
+
+
+def test_httpx_kwargs_from_session_preserves_cookie_scope() -> None:
+    """Cookies keep their domain/path scope instead of being flattened."""
+    session = requests.Session()
+    session.cookies.set("shared", "other-service", domain="internal.example", path="/x")
+    session.cookies.set("shared", "langsmith", domain="api.smith.langchain.com")
+
+    cookies = httpx.Cookies(_httpx_kwargs_from_session(session)["cookies"])
+    request = httpx.Request("GET", "https://api.smith.langchain.com/api/v2/runs")
+    cookies.set_cookie_header(request)
+
+    # The cookie scoped to another host must not be sent to the API.
+    assert request.headers["cookie"] == "shared=langsmith"
+
+
+def test_httpx_kwargs_from_session_omits_requests_defaults() -> None:
+    """`requests`' own default headers must not shadow the httpx/SDK ones."""
+    kwargs = _httpx_kwargs_from_session(requests.Session())
+
+    assert "headers" not in kwargs
+    assert "cookies" not in kwargs
+    assert "verify" not in kwargs
+    assert "cert" not in kwargs
+    assert "proxy" not in kwargs
+    assert "proxies" not in kwargs
+    assert kwargs["trust_env"] is True
+
+
+def test_openapi_clients_apply_provided_session_config() -> None:
+    """Both generated clients honor a caller-supplied session's config."""
+    from langsmith._models import FinalRequestOptions
+
+    session = requests.Session()
+    session.headers["X-Custom"] = "custom-value"
+    session.headers["x-api-key"] = "hijacked"
+    session.cookies.set("cookie-name", "cookie-value")
+    session.verify = False
+
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="test-api-key",
+        auto_batch_tracing=False,
+        session=session,
+    )
+
+    for openapi_client in (
+        client._get_langsmith_api(),
+        client._get_langsmith_api_sync(),
+    ):
+        http_client = openapi_client._client
+        assert http_client.headers["X-Custom"] == "custom-value"
+        assert str(http_client.base_url).rstrip("/") == "http://localhost:1984"
+        # verify=False disables certificate verification on the transport.
+        assert http_client._transport._pool._ssl_context.verify_mode == ssl.CERT_NONE
+
+        request = openapi_client._build_request(FinalRequestOptions(method="get", url="/api/v2/runs"))
+        assert request.headers["cookie"] == "cookie-name=cookie-value"
+        # The SDK's own auth headers still win over the session's.
+        assert "hijacked" not in request.headers["x-api-key"]
+        assert "test-api-key" in request.headers["x-api-key"]
+
+
+def test_openapi_clients_keep_defaults_without_provided_session() -> None:
+    """Without an explicit session there is nothing to port over."""
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="test-api-key",
+        auto_batch_tracing=False,
+    )
+
+    assert "python-requests" not in client._get_langsmith_api()._client.headers.get("user-agent", "")
+    assert "python-requests" not in client._get_langsmith_api_sync()._client.headers.get("user-agent", "")
+
+
+def test_process_buffered_run_ops_core_functionality():
+    """Test core functionality: parameter validation, basic processing, compressed traces, and mixed operations."""
+    # Test 1: Parameter validation - both parameters must be provided together or neither
+    with pytest.raises(ValueError, match="run_ops_buffer_size must be provided"):
+        Client(
+            api_url="http://localhost:1984",
+            process_buffered_run_ops=lambda x: x,
+            run_ops_buffer_size=None,
+        )
+
+    with pytest.raises(ValueError, match="process_buffered_run_ops must be provided"):
+        Client(
+            api_url="http://localhost:1984",
+            process_buffered_run_ops=None,
+            run_ops_buffer_size=10,
+        )
+
+    # Test 2: Basic functionality with batch ingest
+    processed_ops = []
+
+    def add_custom_field(runs):
+        processed_ops.extend(runs)
+        for run in runs:
+            run["custom_processed"] = True
+            run["batch_size"] = len(runs)
+        return runs
+
+    with mock.patch("langsmith.client.requests.Session") as mock_session_cls:
+        mock_session = mock_session_cls.return_value
+        mock_response = mock.MagicMock()
+        mock_response.json.return_value = {
+            "batch_ingest_config": {
+                "use_multipart_endpoint": True,
+                "size_limit": 100,
+                "scale_up_nthreads_limit": 4,
+                "scale_up_qsize_trigger": 100,
+                "scale_down_nempty_trigger": 4,
+            },
+            "instance_flags": {"zstd_compression_enabled": True},
+        }
+        mock_session.request.return_value = mock_response
+
+        # Test 3: Compressed traces integration setup
+        with (
+            mock.patch("langsmith._internal._background_thread.tracing_control_thread_func"),
+            mock.patch("langsmith._internal._background_thread.tracing_control_thread_func_compress_parallel"),
+            mock.patch("threading.Thread"),
+        ):
+            client = Client(
+                api_url="http://localhost:1984",
+                process_buffered_run_ops=add_custom_field,
+                run_ops_buffer_size=3,
+                auto_batch_tracing=True,
+            )
+
+            # Verify setup
+            assert client._process_buffered_run_ops == add_custom_field
+            assert client._run_ops_buffer_size == 3
+            assert hasattr(client, "_run_ops_buffer")
+            assert hasattr(client, "_run_ops_buffer_lock")
+
+            # Test 4: Mixed POST/PATCH operations
+            trace_id = str(uuid.uuid4())
+            create_runs = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "create_run",
+                    "run_type": "llm",
+                    "inputs": {},
+                    "trace_id": trace_id,
+                    "dotted_order": f"20240101000001.{uuid.uuid4()}",
+                }
+            ]
+            update_runs = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "update_run",
+                    "outputs": {"result": "test"},
+                    "trace_id": trace_id,
+                    "dotted_order": f"20240101000002.{uuid.uuid4()}",
+                }
+            ]
+
+            client.batch_ingest_runs(create=create_runs, update=update_runs)
+
+            # Verify processing
+            assert len(processed_ops) == 2
+            assert all(run.get("custom_processed") is True for run in processed_ops)
+            # Note: batch_size may vary depending on how operations are batched internally
+
+
+def test_process_buffered_run_ops_advanced_behavior():
+    """Test thread pool fallback and time-based flushing behavior."""
+    # Test 1: Thread pool fallback when unavailable
+    processed_runs = []
+
+    def capture_runs(runs):
+        processed_runs.extend(runs)
+        return runs
+
+    with (
+        mock.patch("langsmith.client.CompressedTraces"),
+        mock.patch("langsmith._internal._background_thread.LANGSMITH_CLIENT_THREAD_POOL") as mock_pool,
+    ):
+        mock_pool.submit.side_effect = RuntimeError("Thread pool shut down")
+
+        with mock.patch("langsmith._internal._background_thread._process_buffered_run_ops_batch") as mock_process:
+            client = Client(
+                api_url="http://localhost:1984",
+                process_buffered_run_ops=capture_runs,
+                run_ops_buffer_size=1,
+                auto_batch_tracing=True,
+            )
+
+            # Test fallback behavior
+            client._run_ops_buffer = [
+                (
+                    "post",
+                    {"id": "test", "name": "test_run"},
+                    {
+                        "api_url": None,
+                        "api_key": None,
+                        "service_key": None,
+                        "tenant_id": None,
+                        "authorization": None,
+                        "cookie": None,
+                    },
+                )
+            ]
+            client._flush_run_ops_buffer()
+            mock_process.assert_called_once()
+
+    # Test 2: Time-based flushing logic
+    client = Client(
+        api_url="http://localhost:1984",
+        process_buffered_run_ops=capture_runs,
+        run_ops_buffer_size=10,  # Large buffer
+        run_ops_buffer_timeout_ms=1000.0,  # 1 second timeout
+    )
+
+    # Should not flush yet (time not reached)
+    client._run_ops_buffer.append(
+        (
+            "post",
+            {"id": "run1", "name": "test"},
+            {
+                "api_url": None,
+                "api_key": None,
+                "service_key": None,
+                "tenant_id": None,
+                "authorization": None,
+                "cookie": None,
+            },
+        )
+    )
+    client._run_ops_buffer_last_flush_time = time.time() - 0.5  # 0.5 seconds ago
+    assert not client._should_flush_run_ops_buffer()
+
+    # Should flush when time threshold reached
+    client._run_ops_buffer_last_flush_time = time.time() - 1.5  # 1.5 seconds ago
+    assert client._should_flush_run_ops_buffer()
+
+    # Should flush when size threshold reached
+    client._run_ops_buffer.clear()
+    client._run_ops_buffer_last_flush_time = time.time()  # Recent flush
+    for i in range(10):  # Fill to buffer size
+        client._run_ops_buffer.append(
+            (
+                "post",
+                {"id": f"run_{i}", "name": "test"},
+                {
+                    "api_url": None,
+                    "api_key": None,
+                    "service_key": None,
+                    "tenant_id": None,
+                    "authorization": None,
+                    "cookie": None,
+                },
+            )
+        )
+    assert client._should_flush_run_ops_buffer()
+
+
+def test_process_buffered_run_ops_validation_errors():
+    """Test validation catches invalid transformations and handles edge cases."""
+
+    def drop_run(runs):
+        return runs[:-1] if runs else []
+
+    def change_id(runs):
+        if runs:
+            runs = runs.copy()
+            runs[0] = runs[0].copy()
+            runs[0]["id"] = "changed_id"
+        return runs
+
+    def reorder_runs(runs):
+        return list(reversed(runs)) if len(runs) > 1 else runs
+
+    run_dicts = [{"id": "run_1", "name": "test1"}, {"id": "run_2", "name": "test2"}]
+    original_ids = [run.get("id") for run in run_dicts]
+
+    # Test count validation
+    processed_runs = drop_run(run_dicts)
+    with pytest.raises(ValueError, match="must return the same number of runs"):
+        if len(processed_runs) != len(run_dicts):
+            raise ValueError(
+                f"process_buffered_run_ops must return the same number of runs. "
+                f"Expected {len(run_dicts)}, got {len(processed_runs)}"
+            )
+
+    # Test ID preservation validation
+    processed_runs = change_id(run_dicts)
+    processed_ids = [run.get("id") for run in processed_runs]
+    with pytest.raises(ValueError, match="must preserve run IDs in the same order"):
+        if processed_ids != original_ids:
+            raise ValueError(
+                f"process_buffered_run_ops must preserve run IDs in the same order. "
+                f"Expected {original_ids}, got {processed_ids}"
+            )
+
+    # Test order validation
+    processed_runs = reorder_runs(run_dicts.copy())
+    processed_ids = [run.get("id") for run in processed_runs]
+    with pytest.raises(ValueError, match="must preserve run IDs in the same order"):
+        if processed_ids != original_ids:
+            raise ValueError(
+                f"process_buffered_run_ops must preserve run IDs in the same order. "
+                f"Expected {original_ids}, got {processed_ids}"
+            )
+
+    # Test valid transformation passes
+    def valid_transform(runs):
+        return [dict(run, processed=True) for run in runs]
+
+    processed_runs = valid_transform(run_dicts.copy())
+    processed_ids = [run.get("id") for run in processed_runs]
+    assert len(processed_runs) == len(run_dicts)
+    assert processed_ids == original_ids
+    assert all(run.get("processed") for run in processed_runs)
+
+
+def test_process_buffered_run_ops_end_to_end_integration():
+    """Test complete end-to-end integration including background threading and file handling."""
+    import threading
+    import time
+    from unittest.mock import MagicMock
+
+    processed_batches = []
+
+    def track_processing(runs):
+        batch_copy = [run.copy() for run in runs]
+        processed_batches.append(batch_copy)
+        for run in runs:
+            run["processed_by_test"] = True
+            run["processing_timestamp"] = time.time()
+        return runs
+
+    with mock.patch("langsmith.client.requests.Session") as mock_session_cls:
+        mock_session = mock_session_cls.return_value
+        mock_response = mock.MagicMock()
+        mock_response.json.return_value = {
+            "batch_ingest_config": {
+                "use_multipart_endpoint": True,
+                "size_limit": 100,
+                "scale_up_nthreads_limit": 4,
+                "scale_up_qsize_trigger": 100,
+                "scale_down_nempty_trigger": 4,
+            },
+            "instance_flags": {"zstd_compression_enabled": True},
+        }
+        mock_session.request.return_value = mock_response
+
+        with mock.patch("langsmith.client.CompressedTraces") as mock_compressed_traces_class:
+            mock_compressed_traces = MagicMock()
+            mock_compressed_traces.lock = threading.Lock()
+            mock_compressed_traces.trace_count = 0
+            mock_compressed_traces_class.return_value = mock_compressed_traces
+
+            with mock.patch("langsmith.client.Client._send_compressed_multipart_req"):
+                client = Client(
+                    api_url="http://localhost:1984",
+                    process_buffered_run_ops=track_processing,
+                    run_ops_buffer_size=2,
+                    run_ops_buffer_timeout_ms=1000,
+                    auto_batch_tracing=True,
+                )
+
+                # Create and process test runs
+                trace_id = str(uuid.uuid4())
+                test_runs = []
+                for i in range(3):  # More than buffer size
+                    run_data = {
+                        "id": str(uuid.uuid4()),
+                        "name": f"test_run_{i}",
+                        "run_type": "llm",
+                        "inputs": {"test": f"input_{i}"},
+                        "trace_id": trace_id,
+                        "dotted_order": f"2024010100000{i}.{uuid.uuid4()}",
+                    }
+                    test_runs.append(run_data)
+
+                    with client._run_ops_buffer_lock:
+                        client._run_ops_buffer.append(
+                            (
+                                "post",
+                                run_data,
+                                {
+                                    "api_url": None,
+                                    "api_key": None,
+                                    "service_key": None,
+                                    "tenant_id": None,
+                                    "authorization": None,
+                                    "cookie": None,
+                                },
+                            )
+                        )
+                        if client._should_flush_run_ops_buffer():
+                            client._flush_run_ops_buffer()
+
+                # Wait for background processing
+                time.sleep(0.1)
+                with client._run_ops_buffer_lock:
+                    if client._run_ops_buffer:
+                        client._flush_run_ops_buffer()
+                time.sleep(0.2)
+
+                # Verify processing results
+                assert len(processed_batches) > 0, "No batches were processed"
+                total_processed = sum(len(batch) for batch in processed_batches)
+                assert total_processed == len(test_runs)
+
+                for batch in processed_batches:
+                    for run in batch:
+                        assert "id" in run
+                        assert "name" in run
+
+                client.cleanup()
+
+
+def test_run_ops_buffer_preserves_service_auth_overrides():
+    """Buffered run ops must preserve per-op service auth overrides."""
+    import uuid
+
+    def noop(runs):
+        return runs
+
+    client = Client(
+        api_url="https://default.example.com",
+        api_key="default-key",
+        info={"version": "0.0.0"},
+        process_buffered_run_ops=noop,
+        run_ops_buffer_size=100,
+    )
+
+    run_id = uuid.uuid4()
+    client.create_run(
+        id=run_id,
+        name="test",
+        run_type="chain",
+        inputs={"x": 1},
+        trace_id=run_id,
+        dotted_order="20240101T000000000000Z00000000000000000000000000000000",
+        service_key="jwt-token-123",
+        tenant_id="tenant-abc",
+    )
+    assert client._run_ops_buffer, "expected buffered run op"
+    op, _, write_ctx = client._run_ops_buffer[-1]
+    assert op == "post"
+    assert write_ctx["service_key"] == "jwt-token-123"
+    assert write_ctx["tenant_id"] == "tenant-abc"
+
+    client.update_run(
+        run_id,
+        outputs={"y": 2},
+        trace_id=run_id,
+        dotted_order="20240101T000000000000Z00000000000000000000000000000001",
+        service_key="jwt-token-456",
+        tenant_id="tenant-def",
+    )
+    op, _, write_ctx = client._run_ops_buffer[-1]
+    assert op == "patch"
+    assert write_ctx["service_key"] == "jwt-token-456"
+    assert write_ctx["tenant_id"] == "tenant-def"
+
+    # Test file closing logic
+    files_closed = []
+    mock_files = []
+    for i in range(3):
+        mock_file = MagicMock()
+        mock_file.name = f"test_file_{i}.txt"
+        mock_file.close = lambda i=i: files_closed.append(i)
+        mock_files.append(mock_file)
+
+    # Simulate file closing from background thread
+    for file_obj in mock_files:
+        if hasattr(file_obj, "close"):
+            try:
+                file_obj.close()
+            except Exception:
+                pass
+
+    assert len(files_closed) == len(mock_files)
+    assert files_closed == [0, 1, 2]
+
+    # Test error handling in file closing
+    exception_files = []
+    for i in range(2):
+        mock_file = MagicMock()
+        mock_file.close.side_effect = IOError(f"Cannot close file {i}")
+        exception_files.append(mock_file)
+
+    # Should not raise exceptions
+    for file_obj in exception_files:
+        if hasattr(file_obj, "close"):
+            try:
+                file_obj.close()
+            except Exception:
+                pass
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_list_runs_child_run_ids_deprecation_warning(
+    mock_session_cls: mock.Mock,
+) -> None:
+    """Test that using child_run_ids in select parameter raises a deprecation warning."""
+
+    mock_session = mock.Mock()
+    mock_session_cls.return_value = mock_session
+    mock_session.request.return_value.json.return_value = {"runs": []}
+
+    client = Client()
+
+    # Test that deprecation warning is raised when child_run_ids is in select
+    with pytest.warns(DeprecationWarning, match="child_run_ids field is deprecated"):
+        list(
+            client.list_runs(
+                project_id=uuid.uuid4(),
+                select=["id", "name", "child_run_ids"],
+            )
+        )
+
+    # Overall list_runs deprecation fires; child_run_ids-specific warning must not
+    with pytest.warns(DeprecationWarning) as warning_list:
+        list(client.list_runs(project_id=uuid.uuid4(), select=["id", "name"]))
+    assert not any("child_run_ids" in str(w.message) for w in warning_list)
+
+
+def _runs_query_bodies(mock_session: mock.Mock) -> list[dict]:
+    return [json.loads(c.kwargs["data"]) for c in mock_session.request.call_args_list if "/runs/query" in str(c)]
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_list_runs_default_select_includes_s3_urls(
+    mock_session_cls: mock.Mock,
+) -> None:
+    """run.attachments is built from s3_urls; the server only returns it when selected."""
+    mock_session = mock.Mock()
+    mock_session_cls.return_value = mock_session
+    mock_session.request.return_value.json.return_value = {"runs": []}
+
+    client = Client()
+    with pytest.warns(DeprecationWarning):
+        list(client.list_runs(project_id=uuid.uuid4()))
+
+    bodies = _runs_query_bodies(mock_session)
+    assert bodies
+    assert "s3_urls" in bodies[0]["select"]
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_list_threads_select_includes_s3_urls(
+    mock_session_cls: mock.Mock,
+) -> None:
+    """Thread runs get attachments from s3_urls; the server only returns it when selected."""
+    mock_session = mock.Mock()
+    mock_session_cls.return_value = mock_session
+    mock_session.request.return_value.json.return_value = {"runs": []}
+
+    client = Client()
+    with pytest.warns(DeprecationWarning):
+        client.list_threads(project_id=uuid.uuid4())
+
+    bodies = _runs_query_bodies(mock_session)
+    assert bodies
+    assert "s3_urls" in bodies[0]["select"]
+
+
+def test_tracing_error_callback_on_429():
+    """Test that tracing_error_callback is invoked on 429 errors in multipart flow."""
+    mock_session = MagicMock()
+
+    # Track callback invocations
+    callback_errors = []
+    callback_event = threading.Event()
+
+    def error_callback(error: Exception):
+        callback_errors.append(error)
+        callback_event.set()
+
+    # Mock successful response for info endpoint
+    info_response = MagicMock()
+    info_response.status_code = 200
+    info_response.json.return_value = {
+        "version": "0.1.0",
+        "batch_ingest_config": {
+            "size_limit": 1,  # Process immediately
+            "size_limit_bytes": 1,  # Process immediately
+            "use_multipart_endpoint": True,
+            "scale_up_nthreads_limit": 16,
+            "scale_up_qsize_trigger": 1,  # Scale up immediately
+            "scale_down_nempty_trigger": 4,
+        },
+        "instance_flags": {
+            "zstd_compression_enabled": False,
+        },
+    }
+
+    # Mock 429 response for batch ingest
+    rate_limit_response = MagicMock()
+    rate_limit_response.status_code = 429
+    rate_limit_response.text = "Rate limit exceeded"
+    rate_limit_response.raise_for_status.side_effect = HTTPError(response=rate_limit_response)
+
+    def mock_request_handler(method, url, **kwargs):
+        # Return info for info endpoint
+        if url.endswith("/info"):
+            return info_response
+        # Return 429 for multipart endpoint
+        elif "multipart" in url:
+            return rate_limit_response
+        # Return 200 for other endpoints (should not be called in this test)
+        else:
+            success_response = MagicMock()
+            success_response.status_code = 200
+            return success_response
+
+    mock_session.request.side_effect = mock_request_handler
+
+    client = Client(
+        api_key="test",
+        session=mock_session,
+        auto_batch_tracing=True,
+        tracing_error_callback=error_callback,
+    )
+
+    # Create a test run using RunTree with trace_id and dotted_order
+    run_id = uuid.uuid4()
+    trace_id = uuid.uuid4()
+    run = RunTree(
+        name="test_run",
+        id=run_id,
+        trace_id=trace_id,
+        dotted_order=f"{time.time()}.{run_id}",
+        client=client,
+        project_name="test_project",
+        inputs={"input": "test"},
+    )
+    run.post()  # Explicitly post to trigger queue
+    run.end(outputs={"output": "test"})
+    run.patch()  # Explicitly patch to trigger queue
+
+    # Wait for the background thread to process
+    time.sleep(0.5)
+
+    # Now wait for callback
+    callback_event.wait(timeout=10.0)
+
+    # Verify callback was invoked with the error
+    assert len(callback_errors) >= 1, (
+        f"Expected callback to be invoked, got {len(callback_errors)} errors. "
+        f"Queue size: {client.tracing_queue.qsize() if client.tracing_queue else 'N/A'}"
+    )
+    assert isinstance(callback_errors[0], LangSmithRateLimitError)
+    assert "Rate limit exceeded" in str(callback_errors[0])
+
+
+@patch("langsmith.client.requests.Session")
+def test_prompt_commit_tags(mock_session_cls: mock.Mock) -> None:
+    """Test _create_commit_tags functionality and create_commit integration with tags."""
+    try:
+        from langchain_core.prompts import ChatPromptTemplate
+    except ImportError:
+        pytest.skip("Skipping test that requires langchain-core")
+
+    mock_session = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+
+    def mock_request(method, url, **kwargs):
+        response = MagicMock()
+        response.status_code = 200
+
+        if "/commits/" in url and method == "GET":
+            response.json.return_value = {
+                "commits": [{"commit_hash": "parent123", "id": "1"}],
+                "total": 1,
+            }
+        elif "/commits/" in url and method == "POST":
+            response.json.return_value = {"commit": {"commit_hash": "new_commit_123", "id": "1"}}
+        elif "/repos/" in url and "/tags" in url and method == "POST":
+            response.json.return_value = {}
+        else:
+            response.json.return_value = {}
+
+        return response
+
+    mock_session.request.side_effect = mock_request
+    mock_session_cls.return_value = mock_session
+
+    client = Client(
+        api_url="http://localhost:1984",
+        api_key="test_api_key",
+    )
+
+    # Test 1: _create_commit_tags with multiple tags
+    mock_session.request.reset_mock()
+    mock_session.request.return_value = mock_response
+    tags = ["tag1", "tag2", "tag3"]
+    commit_id = "abc123"
+    client._create_commit_tags("test-owner/test-repo", commit_id, tags)
+
+    post_calls = [
+        call for call in mock_session.request.call_args_list if call[0][0] == "POST" and "/repos/" in call[0][1]
+    ]
+    assert len(post_calls) == 3
+
+    # Verify all tags were created (order not guaranteed due to threading)
+    tag_names_created = {call[1]["json"]["tag_name"] for call in post_calls}
+    assert tag_names_created == set(tags)
+
+    # Verify all calls have correct structure
+    for call_args in post_calls:
+        assert call_args[0][0] == "POST"
+        assert call_args[0][1].endswith("/repos/test-owner/test-repo/tags")
+        assert call_args[1]["json"]["commit_id"] == commit_id
+        assert call_args[1]["json"]["tag_name"] in tags
+
+    # Test 2: Empty tags list
+    mock_session.request.reset_mock()
+    client._create_commit_tags("owner/repo", "commit123", [])
+
+    post_calls = [
+        call for call in mock_session.request.call_args_list if call[0][0] == "POST" and "/repos/" in call[0][1]
+    ]
+    assert len(post_calls) == 0
+
+    # Test 3: create_commit with tags
+    mock_session.request.reset_mock()
+    mock_session.request.side_effect = mock_request
+
+    with patch.object(Client, "_prompt_exists", return_value=True):
+        with patch.object(Client, "_current_tenant_is_owner", return_value=True):
+            with patch.object(Client, "_get_settings") as mock_settings:
+                mock_settings.return_value = ls_schemas.LangSmithSettings(
+                    id=str(uuid.uuid4()),
+                    tenant_handle="test-owner",
+                    display_name="test_commit",
+                    created_at=datetime.now(),
+                )
+
+                prompt = ChatPromptTemplate.from_messages(
+                    [
+                        ("system", "You are a helpful assistant"),
+                        ("human", "{input}"),
+                    ]
+                )
+
+                # Create commit with tags
+                commit_tags = ["production", "v1.0"]
+                client.create_commit(
+                    "test-owner/test-prompt",
+                    prompt,
+                    tags=commit_tags,
+                )
+
+                tag_post_calls = [
+                    call
+                    for call in mock_session.request.call_args_list
+                    if call[0][0] == "POST" and "/repos/" in call[0][1] and "/tags" in call[0][1]
+                ]
+                assert len(tag_post_calls) == 2
+
+                tag_names = [call[1]["json"]["tag_name"] for call in tag_post_calls]
+                assert "production" in tag_names
+                assert "v1.0" in tag_names
+
+    # Test 4: create_commit without tags
+    mock_session.request.reset_mock()
+    mock_session.request.side_effect = mock_request
+
+    with patch.object(Client, "_prompt_exists", return_value=True):
+        with patch.object(Client, "_current_tenant_is_owner", return_value=True):
+            with patch.object(Client, "_get_settings") as mock_settings:
+                mock_settings.return_value = ls_schemas.LangSmithSettings(
+                    id=str(uuid.uuid4()),
+                    tenant_handle="test-owner",
+                    display_name="test_commit",
+                    created_at=datetime.now(),
+                )
+
+                client.create_commit(
+                    "test-owner/test-prompt",
+                    prompt,
+                )
+
+                tag_post_calls = [
+                    call
+                    for call in mock_session.request.call_args_list
+                    if call[0][0] == "POST" and "/repos/" in call[0][1] and "/tags" in call[0][1]
+                ]
+                assert len(tag_post_calls) == 0
+
+    # Test 5: create_commit with description
+    mock_session.request.reset_mock()
+    mock_session.request.side_effect = mock_request
+
+    with patch.object(Client, "_prompt_exists", return_value=True):
+        with patch.object(Client, "_current_tenant_is_owner", return_value=True):
+            with patch.object(Client, "_get_settings") as mock_settings:
+                mock_settings.return_value = ls_schemas.LangSmithSettings(
+                    id=str(uuid.uuid4()),
+                    tenant_handle="test-owner",
+                    display_name="test_commit",
+                    created_at=datetime.now(),
+                )
+
+                client.create_commit(
+                    "test-owner/test-prompt",
+                    prompt,
+                    description="initial prompt version",
+                )
+
+                commit_post_calls = [
+                    call
+                    for call in mock_session.request.call_args_list
+                    if call[0][0] == "POST" and "/commits/" in call[0][1] and "/tags" not in call[0][1]
+                ]
+                assert len(commit_post_calls) == 1
+                body = commit_post_calls[0][1]["json"]
+                assert body["description"] == "initial prompt version"
+
+    # Test 6: create_commit without description omits field from body
+    mock_session.request.reset_mock()
+    mock_session.request.side_effect = mock_request
+
+    with patch.object(Client, "_prompt_exists", return_value=True):
+        with patch.object(Client, "_current_tenant_is_owner", return_value=True):
+            with patch.object(Client, "_get_settings") as mock_settings:
+                mock_settings.return_value = ls_schemas.LangSmithSettings(
+                    id=str(uuid.uuid4()),
+                    tenant_handle="test-owner",
+                    display_name="test_commit",
+                    created_at=datetime.now(),
+                )
+
+                client.create_commit(
+                    "test-owner/test-prompt",
+                    prompt,
+                )
+
+                commit_post_calls = [
+                    call
+                    for call in mock_session.request.call_args_list
+                    if call[0][0] == "POST" and "/commits/" in call[0][1] and "/tags" not in call[0][1]
+                ]
+                assert len(commit_post_calls) == 1
+                body = commit_post_calls[0][1]["json"]
+                assert "description" not in body
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected_params,expected_body_fields",
+    [
+        # Basic project creation
+        (
+            {},
+            {},
+            {"description": None, "extra": None},
+        ),
+        # Project with upsert=True
+        (
+            {"upsert": True},
+            {"upsert": True},
+            {},
+        ),
+        # Project with metadata and description
+        (
+            {"description": "Test description", "metadata": {"key": "value"}},
+            {},
+            {
+                "description": "Test description",
+                "extra": {"metadata": {"key": "value"}},
+            },
+        ),
+        # Project with project_extra and metadata (metadata should merge)
+        (
+            {"project_extra": {"custom": "data"}, "metadata": {"key": "value"}},
+            {},
+            {"extra": {"custom": "data", "metadata": {"key": "value"}}},
+        ),
+        # Project with reference_dataset_id
+        (
+            {"reference_dataset_id": "DATASET_ID_PLACEHOLDER"},
+            {},
+            {"reference_dataset_id": "DATASET_ID_PLACEHOLDER"},
+        ),
+        (
+            {"tag_value_ids": ["550e8400-e29b-41d4-a716-446655440000"]},
+            {},
+            {"tag_value_ids": ["550e8400-e29b-41d4-a716-446655440000"]},
+        ),
+        # All parameters together
+        (
+            {
+                "description": "Full test",
+                "metadata": {"key": "value"},
+                "upsert": True,
+                "project_extra": {"custom": "data"},
+                "reference_dataset_id": "DATASET_ID_PLACEHOLDER",
+            },
+            {"upsert": True},
+            {
+                "description": "Full test",
+                "extra": {"custom": "data", "metadata": {"key": "value"}},
+                "reference_dataset_id": "DATASET_ID_PLACEHOLDER",
+            },
+        ),
+    ],
+)
+def test_create_project(kwargs, expected_params, expected_body_fields):
+    """Test that create_project passes all parameters correctly."""
+    with patch("langsmith.client.requests.Session") as mock_session_cls:
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        project_id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+        dataset_id = uuid.uuid4()
+        mock_response.json.return_value = {
+            "id": str(project_id),
+            "name": "test-project",
+            "tenant_id": str(tenant_id),
+            "reference_dataset_id": str(dataset_id),
+        }
+        mock_session.request.return_value = mock_response
+        mock_session_cls.return_value = mock_session
+
+        client = Client(api_key="test", auto_batch_tracing=False)
+
+        # Replace placeholder with actual dataset_id
+        if "reference_dataset_id" in kwargs:
+            kwargs["reference_dataset_id"] = dataset_id
+        if "reference_dataset_id" in expected_body_fields:
+            expected_body_fields["reference_dataset_id"] = str(dataset_id)
+
+        _result = client.create_project("test-project", **kwargs)
+
+        assert mock_session.request.called
+        call_args = mock_session.request.call_args
+        assert call_args[0] == ("POST", f"{client.api_url}/sessions")
+
+        params = call_args.kwargs.get("params", {})
+        assert params == expected_params
+
+        body = json.loads(call_args.kwargs["data"])
+        assert body["name"] == "test-project"
+        assert "id" in body
+        for field, value in expected_body_fields.items():
+            assert body[field] == value
+
+
+def test_create_dataset_with_tag_value_ids():
+    tag_value_ids = [uuid.uuid4(), uuid.uuid4()]
+    with patch("langsmith.client.requests.Session") as mock_session_cls:
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "id": str(uuid.uuid4()),
+            "name": "test-dataset",
+            "created_at": "2024-01-01T00:00:00Z",
+        }
+        mock_session.request.return_value = mock_response
+        mock_session_cls.return_value = mock_session
+
+        client = Client(api_key="test", auto_batch_tracing=False)
+        client.create_dataset("test-dataset", tag_value_ids=tag_value_ids)
+
+        create_call = next(
+            call
+            for call in mock_session.request.call_args_list
+            if call.args[0] == "POST" and call.args[1].endswith("/datasets")
+        )
+        body = json.loads(create_call.kwargs["data"])
+        assert body["tag_value_ids"] == [str(tag_id) for tag_id in tag_value_ids]
+
+
+_MULTIPART_HEADERS = {"Content-Type": "multipart/form-data; boundary=test-boundary"}
+
+
+class TestWriteTraceToFallbackDir:
+    def test_creates_file_with_correct_envelope(self, tmp_path):
+        body = b'--boundary\r\nContent-Disposition: form-data; name="post.abc"\r\n\r\n{}\r\n--boundary--\r\n'
+        Client._write_trace_to_fallback_dir(
+            str(tmp_path),
+            body,
+            endpoint="runs/multipart",
+            headers=_MULTIPART_HEADERS,
+        )
+
+        files = list(tmp_path.iterdir())
+        assert len(files) == 1
+        assert files[0].suffix == ".json"
+
+        envelope = json.loads(files[0].read_text())
+        assert envelope["version"] == 1
+        assert envelope["endpoint"] == "runs/multipart"
+        assert envelope["headers"] == _MULTIPART_HEADERS
+        import base64
+
+        assert base64.b64decode(envelope["body_base64"]) == body
+
+    def test_write_error_is_swallowed(self, tmp_path):
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dir")
+        Client._write_trace_to_fallback_dir(
+            str(blocker / "sub"),
+            b"{}",
+            endpoint="runs/multipart",
+            headers=_MULTIPART_HEADERS,
+        )
+
+    def test_drops_new_traces_when_over_limit(self, tmp_path):
+        # Each envelope is ~252 bytes on disk.  A budget of 400 bytes allows
+        # the first 2 files (~504 bytes total exceeds 400), so the 3rd write
+        # is dropped because the directory is already over the limit.
+        body = b"x" * 80
+        for _ in range(3):
+            Client._write_trace_to_fallback_dir(
+                str(tmp_path),
+                body,
+                endpoint="runs/multipart",
+                headers=_MULTIPART_HEADERS,
+                max_bytes=400,
+            )
+
+        files = sorted(tmp_path.iterdir())
+        # Only the first 2 files should exist; the 3rd was dropped.
+        assert len(files) == 2
+
+    def test_multipart_failure_writes_envelope(self, tmp_path, monkeypatch):
+        """Integration: a failed multipart upload writes a replayable envelope."""
+        _clear_env_cache()
+        monkeypatch.setenv("LANGSMITH_FAILED_TRACES_DIR", str(tmp_path))
+
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="test",
+            auto_batch_tracing=False,
+        )
+
+        run_id = uuid.uuid4()
+        run_json = json.dumps(
+            {
+                "id": str(run_id),
+                "name": "test_run",
+                "run_type": "chain",
+                "inputs": {"x": 1},
+                "trace_id": str(run_id),
+                "dotted_order": str(run_id),
+            }
+        ).encode()
+        parts = [
+            (
+                f"post.{run_id}",
+                (
+                    None,
+                    run_json,
+                    "application/json",
+                    {"Content-Length": str(len(run_json))},
+                ),
+            )
+        ]
+
+        acc = MultipartPartsAndContext(parts, f"create run {run_id}")
+
+        # Mock request_with_retries to simulate server error
+        with mock.patch.object(
+            Client,
+            "request_with_retries",
+            side_effect=ls_utils.LangSmithAPIError("Server error"),
+        ):
+            client._send_multipart_req(acc, attempts=1)
+
+        files = list(tmp_path.iterdir())
+        assert len(files) == 1
+
+        envelope = json.loads(files[0].read_text())
+        assert envelope["endpoint"] == "runs/multipart"
+        assert "multipart/form-data" in envelope["headers"]["Content-Type"]
+        # Body decodes to actual multipart bytes containing our run ID
+        import base64
+
+        decoded = base64.b64decode(envelope["body_base64"]).decode()
+        assert str(run_id) in decoded
+
+        _clear_env_cache()
+
+    def test_multipart_success_does_not_write(self, tmp_path, monkeypatch):
+        """Integration: a successful multipart upload writes nothing."""
+        _clear_env_cache()
+        monkeypatch.setenv("LANGSMITH_FAILED_TRACES_DIR", str(tmp_path))
+
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="test",
+            auto_batch_tracing=False,
+        )
+
+        run_id = uuid.uuid4()
+        run_json = json.dumps({"id": str(run_id), "name": "test", "run_type": "chain"}).encode()
+        parts = [
+            (
+                f"post.{run_id}",
+                (
+                    None,
+                    run_json,
+                    "application/json",
+                    {"Content-Length": str(len(run_json))},
+                ),
+            )
+        ]
+        acc = MultipartPartsAndContext(parts, f"create run {run_id}")
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = ""
+        mock_response.raise_for_status = MagicMock()
+
+        with mock.patch.object(Client, "request_with_retries", return_value=mock_response):
+            client._send_multipart_req(acc, attempts=1)
+
+        assert len(list(tmp_path.iterdir())) == 0
+        _clear_env_cache()
+
+    def test_env_var_sets_failed_traces_dir(self, tmp_path, monkeypatch):
+        _clear_env_cache()
+        monkeypatch.setenv("LANGSMITH_FAILED_TRACES_DIR", str(tmp_path))
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="test",
+            auto_batch_tracing=False,
+        )
+        assert client._failed_traces_dir == str(tmp_path)
+        _clear_env_cache()
+
+    def test_env_var_not_set_leaves_dir_none(self, monkeypatch):
+        _clear_env_cache()
+        monkeypatch.delenv("LANGSMITH_FAILED_TRACES_DIR", raising=False)
+        monkeypatch.delenv("LANGCHAIN_FAILED_TRACES_DIR", raising=False)
+        client = Client(
+            api_url="http://localhost:1984",
+            api_key="test",
+            auto_batch_tracing=False,
+        )
+        assert client._failed_traces_dir is None
+        _clear_env_cache()
+
+    def test_filter_new_token_events_strips_kwargs(self):
+        """Test that _filter_new_token_events strips kwargs from new_token events."""
+        client = Client(api_url="http://localhost:1984", api_key="test")
+        events = [
+            {
+                "name": "new_token",
+                "kwargs": {"token": "sensitive streaming data"},
+                "time": "2024-01-01T00:00:00Z",
+            },
+            {
+                "name": "other_event",
+                "kwargs": {"data": "keep this"},
+                "time": "2024-01-01T00:00:01Z",
+            },
+        ]
+
+        filtered = client._filter_new_token_events(events)
+
+        assert filtered[0]["name"] == "new_token"
+        assert filtered[0]["time"] == "2024-01-01T00:00:00Z"
+        assert "kwargs" not in filtered[0]
+        assert filtered[1]["kwargs"] == {"data": "keep this"}
+
+    def test_filter_new_token_events_empty_events(self):
+        """Test that _filter_new_token_events handles empty events list."""
+        client = Client(api_url="http://localhost:1984", api_key="test")
+        filtered = client._filter_new_token_events([])
+        assert filtered == []
+
+    def test_filter_new_token_events_none_events(self):
+        """Test that _filter_new_token_events handles None events."""
+        client = Client(api_url="http://localhost:1984", api_key="test")
+        filtered = client._filter_new_token_events(None)
+        assert filtered is None
+
+    def test_filter_new_token_events_without_kwargs(self):
+        """Test that _filter_new_token_events handles events without kwargs."""
+        client = Client(api_url="http://localhost:1984", api_key="test")
+        events = [
+            {"name": "new_token", "time": "2024-01-01T00:00:00Z"},
+            {"name": "other_event", "time": "2024-01-01T00:00:01Z"},
+        ]
+
+        filtered = client._filter_new_token_events(events)
+
+        assert filtered[0] == {"name": "new_token", "time": "2024-01-01T00:00:00Z"}
+        assert filtered[1] == {"name": "other_event", "time": "2024-01-01T00:00:01Z"}
+
+    def test_filter_new_token_events_preserves_other_properties(self):
+        """Test that _filter_new_token_events preserves other event properties."""
+        client = Client(api_url="http://localhost:1984", api_key="test")
+        events = [
+            {
+                "name": "new_token",
+                "kwargs": {"token": "data"},
+                "time": "2024-01-01T00:00:00Z",
+                "message": "token received",
+                "custom_field": "custom_value",
+            }
+        ]
+
+        filtered = client._filter_new_token_events(events)
+
+        assert filtered[0]["name"] == "new_token"
+        assert filtered[0]["time"] == "2024-01-01T00:00:00Z"
+        assert filtered[0]["message"] == "token received"
+        assert filtered[0]["custom_field"] == "custom_value"
+        assert "kwargs" not in filtered[0]
+
+    def test_filter_new_token_events_multiple_new_token_events(self):
+        """Test that _filter_new_token_events filters multiple new_token events."""
+        client = Client(api_url="http://localhost:1984", api_key="test")
+        events = [
+            {"name": "new_token", "kwargs": {"token": "chunk1"}, "time": "t1"},
+            {"name": "new_token", "kwargs": {"token": "chunk2"}, "time": "t2"},
+            {"name": "new_token", "kwargs": {"token": "chunk3"}, "time": "t3"},
+        ]
+
+        filtered = client._filter_new_token_events(events)
+
+        assert len(filtered) == 3
+        for event in filtered:
+            assert "kwargs" not in event
+            assert event["name"] == "new_token"
+
+
+def test_client_repr_hides_sensitive_info() -> None:
+    """Test that __repr__ does not expose sensitive information like API keys."""
+    client = Client(
+        api_url="https://api.smith.langchain.com",
+        api_key="super-secret-api-key-12345",
+        auto_batch_tracing=False,
+    )
+
+    repr_str = repr(client)
+    # Ensure API key is NOT in the repr
+    assert "super-secret-api-key-12345" not in repr_str
+    # Ensure the repr shows the API URL
+    assert "https://api.smith.langchain.com" in repr_str
+    # Ensure it's properly formatted
+    assert repr_str == "Client (API URL: https://api.smith.langchain.com)"
+
+
+def test_client_close_releases_session_and_unregisters_atexit() -> None:
+    """``close()`` closes the session and unregisters its atexit handler."""
+    import atexit as _atexit
+
+    session = mock.MagicMock(spec=requests.Session)
+    client = Client(
+        api_url="https://api.smith.langchain.com",
+        api_key="test-key",
+        session=session,
+        auto_batch_tracing=False,
+    )
+
+    handler = client._atexit_handler
+    assert handler is not None
+
+    with mock.patch.object(_atexit, "unregister") as mock_unregister:
+        client.close()
+        mock_unregister.assert_called_once_with(handler)
+
+    session.close.assert_called()
+    assert client._atexit_handler is None
+
+    # Idempotent: calling close again does not raise or re-close.
+    session.close.reset_mock()
+    client.close()
+    session.close.assert_called()
+
+
+def test_client_close_idempotent_no_error() -> None:
+    """Calling ``close()`` multiple times must not raise."""
+    session = mock.MagicMock(spec=requests.Session)
+    client = Client(
+        api_url="https://api.smith.langchain.com",
+        api_key="test-key",
+        session=session,
+        auto_batch_tracing=False,
+    )
+    client.close()
+    client.close()
+
+
+@pytest.mark.parametrize(
+    "attachment, expected",
+    [
+        (("text/plain", b"inline"), False),  # tuple, inline bytes
+        (["text/plain", b"inline"], False),  # list, inline bytes
+        (("text/plain", "/etc/passwd"), True),  # tuple, str path
+        (["text/plain", "/etc/passwd"], True),  # list, str path (exploit shape)
+        (("text/plain", pathlib.Path("/etc/passwd")), True),  # tuple, Path
+        (["text/plain", pathlib.Path("/etc/passwd")], True),  # list, Path
+        (b"inline", False),  # bare bytes
+        ("/etc/passwd", True),  # bare str path
+        (pathlib.Path("/etc/passwd"), True),  # bare Path
+    ],
+)
+def test_attachment_references_filesystem(attachment, expected):
+    """The guard must key off the DATA type, not the container type."""
+    assert _attachment_references_filesystem(attachment) is expected
+
+
+def test_reject_filesystem_attachments_raises_for_list_path():
+    with pytest.raises(ValueError, match="dangerously_allow_filesystem"):
+        _reject_filesystem_attachments(
+            {"exfil": ["text/plain", "/etc/passwd"]},
+            dangerously_allow_filesystem=False,
+        )
+
+
+def test_reject_filesystem_attachments_allows_inline_bytes():
+    # Should not raise.
+    _reject_filesystem_attachments({"ok": ("text/plain", b"data")}, dangerously_allow_filesystem=False)
+
+
+def test_reject_filesystem_attachments_allows_paths_when_opted_in():
+    # Flag set -> no raise even for a path.
+    _reject_filesystem_attachments({"f": ["text/plain", "/etc/passwd"]}, dangerously_allow_filesystem=True)
+
+
+def test_reject_filesystem_attachments_noop_for_empty():
+    _reject_filesystem_attachments(None, dangerously_allow_filesystem=False)
+    _reject_filesystem_attachments({}, dangerously_allow_filesystem=False)
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_create_run_blocks_list_form_filesystem_attachment(mock_session_cls):
+    """JSON-shaped (list/str) attachments must be rejected without the flag.
+
+    Regression for GHSA-f4xh-w4cj-qxq8 -- the guard used to only catch tuple/Path.
+    """
+    mock_session = MagicMock()
+    mock_session_cls.return_value = mock_session
+    client = Client(api_url="http://localhost:1984", api_key="123")
+
+    with pytest.raises(ValueError, match="dangerously_allow_filesystem"):
+        client.create_run(
+            name="x",
+            inputs={},
+            run_type="chain",
+            attachments={"exfil": ["text/plain", "/etc/passwd"]},
+        )
+
+
+@mock.patch("langsmith.client.requests.Session")
+def test_create_run_allows_inline_bytes_attachment(mock_session_cls):
+    """Inline-bytes attachments remain allowed without the flag."""
+    mock_session = MagicMock()
+    mock_session_cls.return_value = mock_session
+    client = Client(api_url="http://localhost:1984", api_key="123")
+
+    # Should not raise.
+    client.create_run(
+        name="x",
+        inputs={},
+        run_type="chain",
+        attachments={"ok": ("text/plain", b"data")},
+    )
+
+
+def test_get_run_stats_requires_project() -> None:
+    """get_run_stats must raise ValueError when no project is specified."""
+    client = Client(api_key="test", api_url="http://localhost")
+    with pytest.raises(ValueError, match="project_names or project_ids"):
+        client.get_run_stats()
+
+
+def test_removed_sdk_methods_absent() -> None:
+    """Verify de-publicized methods were removed from the generated SDK in PR #28358."""
+    from langsmith.resources.datasets.datasets import DatasetsResource
+
+    assert not hasattr(DatasetsResource, "runs"), "datasets.runs was de-publicized and should not exist"
+    assert not hasattr(DatasetsResource, "group"), (
+        "datasets.group.runs was de-publicized in PR #28358 and should not exist"
+    )
+    assert not hasattr(DatasetsResource, "experiments"), (
+        "datasets.experiments.grouped was de-publicized in PR #28358 and should not exist"
+    )
+
+
+class _StubEvaluator(RunEvaluator):
+    """Minimal evaluator that returns a fixed result without doing any work."""
+
+    def evaluate_run(self, run, example=None) -> EvaluationResult:
+        return EvaluationResult(key="stub", score=1)
+
+    async def aevaluate_run(self, run, example=None) -> EvaluationResult:
+        return EvaluationResult(key="stub", score=1)
+
+
+def _stub_run() -> ls_schemas.Run:
+    run_id = uuid.uuid4()
+    return ls_schemas.Run(
+        id=run_id,
+        name="stub",
+        run_type="chain",
+        start_time=_CREATED_AT,
+        trace_id=run_id,
+    )
+
+
+def test_evaluate_run_deprecation_warning() -> None:
+    """evaluate_run is deprecated with no replacement."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    result = EvaluationResult(key="stub", score=1)
+
+    with mock.patch.object(Client, "_log_evaluation_feedback", return_value=[result]) as log_feedback:
+        with pytest.warns(DeprecationWarning, match="evaluate_run\\(\\) is deprecated"):
+            assert client.evaluate_run(_stub_run(), _StubEvaluator()) is result
+    log_feedback.assert_called_once()
+
+
+async def test_aevaluate_run_deprecation_warning() -> None:
+    """aevaluate_run is deprecated with no replacement."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    result = EvaluationResult(key="stub", score=1)
+
+    with mock.patch.object(Client, "_log_evaluation_feedback", return_value=[result]) as log_feedback:
+        with pytest.warns(DeprecationWarning, match="aevaluate_run\\(\\) is deprecated"):
+            assert await client.aevaluate_run(_stub_run(), _StubEvaluator()) is result
+    log_feedback.assert_called_once()
+
+
+def test_get_run_url_deprecation_warning() -> None:
+    """get_run_url is deprecated in favor of client.runs.get_url()."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    run = _stub_run()
+    run.session_id = uuid.uuid4()
+
+    with mock.patch.object(Client, "_get_tenant_id", return_value=uuid.uuid4()):
+        with pytest.warns(DeprecationWarning, match="get_run_url\\(\\) is deprecated"):
+            url = client.get_run_url(run=run)
+    assert str(run.id) in url
+
+
+@pytest.mark.parametrize(
+    "instance_flags",
+    [
+        {"ch_query_enabled": False, "sdb_query_enabled": True},
+        {"ch_query_enabled": True, "sdb_query_enabled": True},
+    ],
+)
+def test_run_tree_get_url_uses_v2_endpoint(instance_flags) -> None:
+    """On SmithDB-only and dual backends, RunTree.get_url() asks the backend.
+
+    It must not emit a deprecation warning either — RunTree.get_url() is supported.
+    """
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    project_id = uuid.uuid4()
+    run_tree = RunTree(name="stub", project_id=project_id, ls_client=client)
+
+    runs_resource = mock.Mock()
+    runs_resource.get_url.return_value = mock.Mock(url="http://localhost:1984/run-url")
+    api = mock.Mock()
+    api.runs = runs_resource
+
+    with (
+        patch.object(
+            type(client),
+            "info",
+            property(lambda self: mock.Mock(instance_flags=instance_flags)),
+        ),
+        mock.patch.object(Client, "_get_langsmith_api_sync", return_value=api),
+    ):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert run_tree.get_url() == "http://localhost:1984/run-url"
+
+    runs_resource.get_url.assert_called_once_with(
+        str(run_tree.id),
+        project_id=str(project_id),
+        trace_id=str(run_tree.trace_id),
+        start_time=run_tree.start_time.isoformat(),
+    )
+
+
+def test_run_tree_get_url_builds_url_locally_on_clickhouse_only() -> None:
+    """ClickHouse-only backends may predate `/runs/{run_id}/url`.
+
+    Those deployments must keep getting a locally constructed URL rather than a 404.
+    """
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    project_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    run_tree = RunTree(name="stub", project_id=project_id, ls_client=client)
+
+    api = mock.Mock()
+
+    with (
+        patch.object(
+            type(client),
+            "info",
+            property(lambda self: mock.Mock(instance_flags={"ch_query_enabled": True})),
+        ),
+        mock.patch.object(Client, "_get_langsmith_api_sync", return_value=api),
+        mock.patch.object(Client, "_get_tenant_id", return_value=tenant_id),
+    ):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            url = run_tree.get_url()
+
+    assert url == (f"{client._host_url}/o/{tenant_id}/projects/p/{project_id}/r/{run_tree.id}?poll=true")
+    api.runs.get_url.assert_not_called()
+
+
+def test_run_tree_get_url_is_cached() -> None:
+    """get_url() is called per log line, so it must only hit the backend once."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    run_tree = RunTree(name="stub", project_id=uuid.uuid4(), ls_client=client)
+
+    runs_resource = mock.Mock()
+    runs_resource.get_url.return_value = mock.Mock(url="http://localhost:1984/run-url")
+    api = mock.Mock()
+    api.runs = runs_resource
+    info = mock.Mock(instance_flags={"sdb_query_enabled": True})
+
+    with (
+        patch.object(type(client), "info", property(lambda self: info)),
+        mock.patch.object(Client, "_get_langsmith_api_sync", return_value=api),
+    ):
+        assert run_tree.get_url() == "http://localhost:1984/run-url"
+        assert run_tree.get_url() == "http://localhost:1984/run-url"
+
+    runs_resource.get_url.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        {"side_effect": ValueError("boom")},
+        {"return_value": mock.Mock(url=None)},
+    ],
+)
+def test_run_tree_get_url_falls_back_when_backend_call_fails(failure) -> None:
+    """A transient failure must not turn get_url() into a raising call."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    project_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    run_tree = RunTree(name="stub", project_id=project_id, ls_client=client)
+
+    runs_resource = mock.Mock()
+    runs_resource.get_url = mock.Mock(**failure)
+    api = mock.Mock()
+    api.runs = runs_resource
+
+    with (
+        patch.object(
+            type(client),
+            "info",
+            property(lambda self: mock.Mock(instance_flags={"sdb_query_enabled": True})),
+        ),
+        mock.patch.object(Client, "_get_langsmith_api_sync", return_value=api),
+        mock.patch.object(Client, "_get_tenant_id", return_value=tenant_id),
+    ):
+        url = run_tree.get_url()
+
+    assert url == (f"{client._host_url}/o/{tenant_id}/projects/p/{project_id}/r/{run_tree.id}?poll=true")
+
+
+def test_run_tree_get_url_without_session_uses_tracer_project() -> None:
+    """A run with no project set must not look up `read_project(None)`."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    project_id = uuid.uuid4()
+    run_tree = RunTree(name="stub", ls_client=client)
+    run_tree.session_name = None  # type: ignore[assignment]
+
+    runs_resource = mock.Mock()
+    runs_resource.get_url.return_value = mock.Mock(url="http://localhost:1984/run-url")
+    api = mock.Mock()
+    api.runs = runs_resource
+
+    with (
+        patch.object(
+            type(client),
+            "info",
+            property(lambda self: mock.Mock(instance_flags={"sdb_query_enabled": True})),
+        ),
+        mock.patch.object(Client, "_get_langsmith_api_sync", return_value=api),
+        mock.patch.object(Client, "read_project", return_value=mock.Mock(id=project_id)) as read_project,
+        mock.patch.object(ls_utils, "get_tracer_project", return_value="from-the-environment"),
+    ):
+        assert run_tree.get_url() == "http://localhost:1984/run-url"
+
+    read_project.assert_called_once_with(project_name="from-the-environment")
+
+
+def _deprecation_messages(recorded) -> list[str]:
+    return [str(w.message) for w in recorded if issubclass(w.category, DeprecationWarning)]
+
+
+def test_read_thread_does_not_warn_about_list_runs() -> None:
+    """read_thread() points at threads.list_traces(), not list_runs()'s runs.query()."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+
+    with pytest.warns(DeprecationWarning) as recorded:
+        # Deprecation fires when the generator is created, before any iteration.
+        client.read_thread(thread_id="t1", project_id=uuid.uuid4())
+
+    messages = _deprecation_messages(recorded)
+    assert any("read_thread() is deprecated" in m for m in messages)
+    assert not any("list_runs() is deprecated" in m for m in messages)
+
+
+def test_read_run_with_child_runs_does_not_warn_about_list_runs() -> None:
+    """The caller asked for child runs, not for list_runs()."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    run = _stub_run()
+
+    with (
+        patch.object(
+            type(client),
+            "info",
+            property(lambda self: mock.Mock(instance_flags={"ch_query_enabled": True})),
+        ),
+        # Only the HTTP layer is stubbed, so the real _load_child_runs() ->
+        # list_runs() chain still executes.
+        mock.patch.object(Client, "request_with_retries") as request,
+        mock.patch.object(Client, "_get_cursor_paginated_list", return_value=iter([])) as paginate,
+    ):
+        request.return_value = mock.Mock(
+            json=lambda: {
+                "id": str(run.id),
+                "name": "stub",
+                "run_type": "chain",
+                "start_time": _CREATED_AT.isoformat(),
+                "trace_id": str(run.id),
+            }
+        )
+        with pytest.warns(DeprecationWarning) as recorded:
+            client.read_run(run.id, load_child_runs=True)
+
+    paginate.assert_called_once()
+    messages = _deprecation_messages(recorded)
+    assert any("read_run() is deprecated" in m for m in messages)
+    assert not any("list_runs() is deprecated" in m for m in messages)
+
+
+def test_load_child_runs_does_not_warn_about_list_runs() -> None:
+    """_load_child_runs() reaches the real list_runs(); no warning may surface."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    run = _stub_run()
+
+    with (
+        patch.object(
+            type(client),
+            "info",
+            property(lambda self: mock.Mock(instance_flags={"ch_query_enabled": True})),
+        ),
+        # Stub only the HTTP fetch, so the real decorated list_runs() still runs.
+        mock.patch.object(Client, "_get_cursor_paginated_list", return_value=iter([])),
+    ):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert client._load_child_runs(run) is run
+
+
+def test_suppress_deprecation_warning_is_scoped() -> None:
+    """The suppression must not leak past its block, including on exceptions."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+
+    with pytest.raises(RuntimeError):
+        with _suppress_deprecation_warning():
+            raise RuntimeError("boom")
+
+    with pytest.warns(DeprecationWarning, match="list_runs\\(\\) is deprecated"):
+        client.list_runs(project_id=uuid.uuid4())
+
+
+_SHARE_TOKEN = uuid.UUID("22222222-2222-2222-2222-222222222222")
+
+
+def _share_response(run_id: uuid.UUID) -> mock.Mock:
+    """One response body that satisfies every sharing endpoint under test."""
+    return mock.Mock(
+        json=lambda: {
+            "share_token": str(_SHARE_TOKEN),
+            "id": str(run_id),
+            "name": "stub",
+            "run_type": "chain",
+            "start_time": _CREATED_AT.isoformat(),
+            "trace_id": str(run_id),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "method,takes_share_token,expected",
+    [
+        ("share_run", False, "Use client.runs.share.create() instead."),
+        ("unshare_run", False, "Use client.runs.share.delete() instead."),
+        (
+            "read_run_shared_link",
+            False,
+            'Use client.runs.retrieve(selects=["SHARE_URL"]) instead.',
+        ),
+        ("read_shared_run", True, "Use client.public.runs.retrieve() instead."),
+        ("list_shared_runs", True, "Use client.public.runs.query() instead."),
+    ],
+)
+def test_run_sharing_methods_are_deprecated(method: str, takes_share_token: bool, expected: str) -> None:
+    """Every method in the guide's sharing section warns once, naming its replacement."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    run_id = uuid.uuid4()
+    arg = _SHARE_TOKEN if takes_share_token else run_id
+
+    with (
+        mock.patch.object(Client, "request_with_retries", return_value=_share_response(run_id)),
+        mock.patch.object(Client, "_get_cursor_paginated_list", return_value=iter([])),
+    ):
+        with pytest.warns(DeprecationWarning) as recorded:
+            result = getattr(client, method)(arg)
+            if method == "list_shared_runs":
+                list(result)  # a generator; drain it so the body runs too
+
+    messages = _deprecation_messages(recorded)
+    assert len(messages) == 1, messages
+    assert f"{method}() is deprecated" in messages[0]
+    assert expected in messages[0]
+    assert "#share-and-read-public-runs" in messages[0]
+
+
+def test_run_is_shared_does_not_warn_about_read_run_shared_link() -> None:
+    """run_is_shared() is supported; it must not warn about its internal call."""
+    client = Client(api_url="http://localhost:1984", api_key="123", session=mock.Mock())
+    run_id = uuid.uuid4()
+
+    # Only the HTTP layer is stubbed, so the real decorated
+    # read_run_shared_link() still executes.
+    with mock.patch.object(Client, "request_with_retries", return_value=_share_response(run_id)):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert client.run_is_shared(run_id) is True
+
+
+@pytest.mark.parametrize(
+    "method,expected",
+    [
+        ("share_run", "Use client.runs.share.create() instead."),
+        (
+            "read_run_shared_link",
+            'Use client.runs.retrieve(selects=["SHARE_URL"]) instead.',
+        ),
+    ],
+)
+async def test_async_run_sharing_methods_are_deprecated(method: str, expected: str) -> None:
+    """The async client's sharing methods carry the same deprecations."""
+    from langsmith.async_client import AsyncClient
+
+    client = AsyncClient(api_url="http://localhost:1984", api_key="123")
+    run_id = uuid.uuid4()
+
+    with mock.patch.object(
+        AsyncClient,
+        "_arequest_with_retries",
+        new=mock.AsyncMock(return_value=_share_response(run_id)),
+    ):
+        with pytest.warns(DeprecationWarning) as recorded:
+            await getattr(client, method)(run_id)
+
+    messages = _deprecation_messages(recorded)
+    assert len(messages) == 1, messages
+    assert f"{method}() is deprecated" in messages[0]
+    assert expected in messages[0]
+    assert "#share-and-read-public-runs" in messages[0]
+
+
+async def test_async_run_is_shared_does_not_warn_about_read_run_shared_link() -> None:
+    """Same suppression as the sync client, for the async `await` path."""
+    from langsmith.async_client import AsyncClient
+
+    client = AsyncClient(api_url="http://localhost:1984", api_key="123")
+    run_id = uuid.uuid4()
+
+    with mock.patch.object(
+        AsyncClient,
+        "_arequest_with_retries",
+        new=mock.AsyncMock(return_value=_share_response(run_id)),
+    ):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert await client.run_is_shared(run_id) is True
+
+
+def _gtr_example_id() -> uuid.UUID:
+    return uuid.UUID("11111111-1111-1111-1111-111111111111")
+
+
+def _gtr_legacy_run() -> mock.Mock:
+    """A `schemas.Run`-shaped run, as `list_runs` returns it."""
+    run = mock.Mock()
+    run.id = uuid.uuid4()
+    run.reference_example_id = _gtr_example_id()  # UUID
+    run.inputs = {"q": "hi"}
+    run.outputs = {"a": "yo"}
+    run.error = None
+    run.start_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    run.end_time = datetime(2024, 1, 1, 0, 0, 5, tzinfo=timezone.utc)
+    run.feedback_stats = {"correctness": {"avg": 0.75}}
+    return run
+
+
+def _gtr_v2_run() -> SimpleNamespace:
+    """A raw v2 `Run`, which types `reference_example_id` as a *str*.
+
+    Uses SimpleNamespace rather than Mock so unset fields read as None, matching
+    the generated model (a Mock would hand `_v2_run_to_schema` truthy garbage).
+    """
+    stat = mock.Mock()
+    stat.model_dump.return_value = {"avg": 0.75}
+    return SimpleNamespace(
+        id=str(uuid.uuid4()),
+        reference_example_id=str(_gtr_example_id()),  # str, not UUID
+        inputs={"q": "hi"},
+        outputs={"a": "yo"},
+        error=None,
+        start_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        end_time=datetime(2024, 1, 1, 0, 0, 5, tzinfo=timezone.utc),
+        # Selected only so `schemas.Run` validates; absent from the dataframe.
+        name="my_run",
+        run_type="CHAIN",
+        trace_id=str(uuid.uuid4()),
+        feedback_stats={"correctness": stat},
+        # Not selected by get_test_results -> None on the generated model.
+        project_id=None,
+        parent_run_ids=[],
+        dotted_order=None,
+        status=None,
+        tags=None,
+        extra=None,
+        events=None,
+        first_token_time=None,
+        app_path=None,
+        prompt_tokens=None,
+        completion_tokens=None,
+        total_tokens=None,
+        prompt_cost=None,
+        completion_cost=None,
+        total_cost=None,
+        prompt_token_details=None,
+        completion_token_details=None,
+        prompt_cost_details=None,
+        completion_cost_details=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("instance_flags", "expect_v2"),
+    [
+        ({"ch_query_enabled": True}, False),
+        ({"ch_query_enabled": True, "sdb_query_enabled": True}, False),
+        ({"ch_query_enabled": False, "sdb_query_enabled": True}, True),
+    ],
+)
+def test_get_test_results_joins_reference_examples(instance_flags, expect_v2) -> None:
+    """Both backends must join runs to their reference examples.
+
+    Regression test: the SmithDB-only branch used to iterate raw v2 runs, whose
+    `reference_example_id` is a str. Indexing the dataframe on a str and merging
+    against UUID example ids produced an empty inner join, silently returning no
+    rows instead of the expected results.
+    """
+    pytest.importorskip("pandas")
+
+    client = Client(api_key="test", api_url="http://localhost")
+    example = mock.Mock()
+    example.id = _gtr_example_id()
+    example.outputs = {"a": "yo"}
+
+    api = mock.MagicMock()
+    api.runs.query_v2.return_value = [_gtr_v2_run()]
+
+    with (
+        patch.object(
+            type(client),
+            "info",
+            property(lambda self: mock.Mock(instance_flags=instance_flags)),
+        ),
+        patch.object(type(client), "list_runs", return_value=[_gtr_legacy_run()]) as mock_list_runs,
+        patch.object(type(client), "_get_langsmith_api_sync", return_value=api),
+        patch.object(type(client), "list_examples", return_value=[example]),
+        patch.object(type(client), "read_project", return_value=mock.Mock(id=uuid.uuid4())),
+    ):
+        with pytest.warns(UserWarning, match="in beta"):
+            df = client.get_test_results(project_name="p")
+
+    # Correct backend was queried.
+    assert mock_list_runs.called is not expect_v2
+    assert api.runs.query_v2.called is expect_v2
+
+    # The run/example join produced a row with both sides' data.
+    assert len(df) == 1, f"expected 1 joined row, got {len(df)}"
+    row = df.iloc[0]
+    assert row["reference.a"] == "yo"
+    assert row["input.q"] == "hi"
+    assert row["outputs.a"] == "yo"
+    assert row["feedback.correctness"] == 0.75
+    assert row["execution_time"] == 5.0
+
+
+def test_compression_threads_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default to a single zstd worker; the env var (including "0") still wins."""
+    import importlib
+
+    from langsmith._internal import _compressed_traces
+
+    def _reload() -> int:
+        _clear_env_cache()
+        return importlib.reload(_compressed_traces).compression_threads
+
+    try:
+        monkeypatch.delenv("LANGSMITH_RUN_COMPRESSION_THREADS", raising=False)
+        monkeypatch.delenv("LANGCHAIN_RUN_COMPRESSION_THREADS", raising=False)
+        assert _reload() == 1
+
+        monkeypatch.setenv("LANGSMITH_RUN_COMPRESSION_THREADS", "0")
+        assert _reload() == 0
+
+        monkeypatch.setenv("LANGSMITH_RUN_COMPRESSION_THREADS", "4")
+        assert _reload() == 4
+    finally:
+        monkeypatch.undo()
+        _reload()
+
+
+def _clear_agent_addressing_caches() -> None:
+    ls_utils.get_env_var.cache_clear()
+    ls_utils.get_tracer_project.cache_clear()
+    # The beta warning fires once per process, so without this the first test
+    # to address a run to an agent would silence every test after it.
+    _warn_once.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _reset_agent_addressing_caches() -> Generator[None, None, None]:
+    """Keep a patched environment from outliving the test that set it.
+
+    `monkeypatch` restores `os.environ`, but these caches hold what was read
+    while it was in place, so the next test sees the previous one's values.
+    """
+    yield
+    _clear_agent_addressing_caches()
+
+
+def _clean_agent_env(monkeypatch: pytest.MonkeyPatch, **values: str) -> None:
+    for name in (
+        "LANGSMITH_AGENT_ID",
+        "LANGSMITH_AGENT_ENVIRONMENT",
+        "LANGSMITH_PROJECT",
+        "LANGCHAIN_PROJECT",
+        "LANGCHAIN_SESSION",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    _clear_agent_addressing_caches()
+
+
+def _multipart_parts(session: mock.Mock) -> dict:
+    """Collect the `post.<id>` / `patch.<id>` JSON parts sent so far, by kind."""
+    parts: dict = {}
+    for call in session.request.mock_calls:
+        if not (call.args and call.args[1].endswith("runs/multipart")):
+            continue
+        headers, data = call[2]["headers"], call[2]["data"]
+        boundary = parse_options_header(headers["Content-Type"])[1]["boundary"]
+        for part in MultipartParser(io.BytesIO(data), boundary).parts():
+            kind, _, rest = part.name.partition(".")
+            if kind in ("post", "patch") and "." not in rest:
+                parts[kind] = json.loads(part.value)
+    return parts
+
+
+def _wait_for_part(session: mock.Mock, kind: str, attempts: int = 50) -> dict:
+    """Wait for a `post`/`patch` part to be flushed by the background thread.
+
+    A patch queued before its post has flushed is merged into the post part, so
+    tests that need both have to wait for the first before sending the second.
+    """
+    for _ in range(attempts):
+        time.sleep(0.1)
+        if (part := _multipart_parts(session).get(kind)) is not None:
+            return part
+    raise AssertionError(f"No {kind} part found")
+
+
+def _multipart_client(session: mock.Mock) -> Client:
+    return Client(
+        api_url="http://localhost:1984",
+        api_key="123",
+        session=session,
+        info=ls_schemas.LangSmithInfo(
+            batch_ingest_config=ls_schemas.BatchIngestConfig(
+                use_multipart_endpoint=True,
+                size_limit_bytes=None,
+                size_limit=1,
+                scale_up_nthreads_limit=16,
+                scale_up_qsize_trigger=1000,
+                scale_down_nempty_trigger=4,
+            )
+        ),
+    )
+
+
+def _minimal_run() -> dict:
+    """The smallest `create_run` call that reaches the multipart payload."""
+    run_id = uuid.uuid4()
+    return {
+        "id": run_id,
+        "name": "r",
+        "inputs": {"a": 1},
+        "run_type": "llm",
+        "trace_id": run_id,
+        "dotted_order": run_trees._create_current_dotted_order(datetime.now(timezone.utc), run_id),
+    }
+
+
+def test_agent_addressed_run_sends_no_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point: agent-addressed payloads carry no session at all.
+
+    Both parts have to agree -- a patch addressed by project while its post
+    went to the agent would land the two halves of one run in two places.
+    """
+    _clean_agent_env(
+        monkeypatch,
+        LANGSMITH_AGENT_ID="my-agent",
+        LANGSMITH_AGENT_ENVIRONMENT="staging",
+    )
+    session = mock.Mock()
+    session.request = mock.Mock()
+    client = _multipart_client(session)
+    run = run_trees.RunTree(name="my_run", inputs={"a": 1}, ls_client=client)
+    run.post()
+    post_body = _wait_for_part(session, "post")
+    run.end(outputs={"b": 2})
+    run.patch()
+    patch_body = _wait_for_part(session, "patch")
+
+    for kind, body in (("post", post_body), ("patch", patch_body)):
+        assert (body.get("agent_id"), body.get("agent_environment")) == (
+            "my-agent",
+            "staging",
+        ), kind
+        assert "session_name" not in body, kind
+        assert "session_id" not in body, kind
+
+
+def test_project_addressed_run_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The legacy path keeps sending a project and no agent fields."""
+    _clean_agent_env(monkeypatch)
+    session = mock.Mock()
+    session.request = mock.Mock()
+    client = _multipart_client(session)
+    run = run_trees.RunTree(name="my_run", inputs={"a": 1}, ls_client=client)
+    run.post()
+
+    body = _wait_for_part(session, "post")
+    assert body.get("session_name") == "default"
+    assert "agent_id" not in body
+    assert "agent_environment" not in body
+
+
+class TestAConfiguredProjectTravelsWithTheAgent:
+    """`LANGSMITH_AGENT_ID` beside `LANGSMITH_PROJECT` must not relocate a trace.
+
+    Only the `"default"` project the SDK would invent on its own is suppressed.
+    A project the caller configured goes out alongside the agent, so the
+    endpoint reports the conflict instead of the SDK silently picking one.
+    """
+
+    def test_a_per_call_project_still_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An argument beats the environment, so the agent drops out entirely."""
+        _clean_agent_env(
+            monkeypatch,
+            LANGSMITH_AGENT_ID="my-agent",
+            LANGSMITH_AGENT_ENVIRONMENT="staging",
+            LANGSMITH_PROJECT="my-proj",
+        )
+        session = mock.Mock()
+        session.request = mock.Mock()
+        client = _multipart_client(session)
+        client.create_run(**_minimal_run(), project_name="explicit")
+
+        body = _wait_for_part(session, "post")
+        assert body.get("session_name") == "explicit"
+        assert "agent_id" not in body
+        assert "agent_environment" not in body
+
+    def test_the_client_warns_once_at_construction(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The endpoint's 400 lands in a background thread, so it only logs.
+
+        Warning where the client is built is the one place the caller sees it.
+        """
+        _clean_agent_env(
+            monkeypatch,
+            LANGSMITH_AGENT_ID="my-agent",
+            LANGSMITH_AGENT_ENVIRONMENT="staging",
+            LANGSMITH_PROJECT="my-proj",
+        )
+        with pytest.warns(ls_utils.LangSmithWarning, match="LANGSMITH_AGENT_ID"):
+            Client(api_url="http://localhost:1984", api_key="123")
+
+
+class TestTheEnvGuardWarnsOnEitherHalf:
+    """Half a pair in the environment is refused, and the batch goes with it."""
+
+    def test_a_complete_pair_alone_stays_quiet(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clean_agent_env(
+            monkeypatch,
+            LANGSMITH_AGENT_ID="my-agent",
+            LANGSMITH_AGENT_ENVIRONMENT="staging",
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ls_utils.LangSmithWarning)
+            Client(api_url="http://localhost:1984", api_key="123")
+
+
+class TestNoRunUrlForAnAgentAddressedRun:
+    """The endpoint resolves the project, so the SDK cannot build the URL.
+
+    Falling through resolved the literal `default` project, handing back a
+    link to the wrong place or raising a not-found from inside what callers
+    treat as a convenience.
+    """
+
+    def test_a_resolved_project_is_enough(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Read back from the endpoint, the run carries a `session_id`."""
+        _clean_agent_env(monkeypatch)
+        client = Client(api_url="http://localhost:1984", api_key="123")
+        run = mock.Mock(
+            id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            agent_id="my-agent",
+            agent_environment="staging",
+        )
+        with mock.patch.object(Client, "_get_tenant_id", return_value=uuid.uuid4()):
+            assert "/projects/p/" in client._construct_run_url(run=run)
+
+
+class TestRemoteInputNeverRaises:
+    """A `baggage` header is attacker-settable, so it is ignored, never raised on."""
+
+    def test_a_baggage_replica_naming_both_is_normalized(self) -> None:
+        """Otherwise a header could make the receiving service raise."""
+        replicas = json.dumps(
+            [
+                {
+                    "project_name": "p-remote",
+                    "agent_id": "ag-remote",
+                    "agent_environment": "prod",
+                }
+            ]
+        )
+        parsed = run_trees._Baggage.from_header(f"{run_trees.LANGSMITH_REPLICAS}={urllib.parse.quote(replicas)}")
+        assert parsed.replicas == [{"project_name": "p-remote"}]
+
+
+class TestPatchInheritsThePostsTarget:
+    """A patch must not be addressed to the agent when its post named a project."""
+
+    def test_an_update_does_not_fill_the_agent_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The post established the target; the patch inherits it by omission.
+
+        An update carries a project only when the caller passed one, and most
+        callers don't -- so filling the agent in here addressed the two halves
+        of one run to two different projects.
+        """
+        _clean_agent_env(
+            monkeypatch,
+            LANGSMITH_AGENT_ID="ag",
+            LANGSMITH_AGENT_ENVIRONMENT="env",
+        )
+        post: dict = {"session_name": "myproj"}
+        _agent_addressing.apply_to_payload(post)
+        patch: dict = {"session_name": None, "session_id": None}
+        _agent_addressing.apply_to_payload(patch, update=True)
+        assert post == {"session_name": "myproj"}
+        # No agent fields added. The null session keys are left exactly as
+        # `update_run` built them, which is what `main` sends today.
+        assert "agent_id" not in patch
+        assert "agent_environment" not in patch
+        assert patch == {"session_name": None, "session_id": None}
+
+
+def test_batch_update_does_not_resolve_the_ambient_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`multipart_ingest(update=...)` must inherit the post's target too.
+
+    Driven through the public method rather than `_apply_agent_addressing`:
+    the first round of tests for this called the helper directly, which is why
+    they passed while `_run_transform` -- and so both batch paths -- stayed
+    broken.
+    """
+    _clean_agent_env(monkeypatch, LANGSMITH_AGENT_ID="ag", LANGSMITH_AGENT_ENVIRONMENT="env")
+    session = mock.Mock()
+    session.request = mock.Mock()
+    client = _multipart_client(session)
+    id_ = uuid.uuid4()
+    dotted = run_trees._create_current_dotted_order(datetime.now(timezone.utc), id_)
+    base: dict = {
+        "id": id_,
+        "trace_id": id_,
+        "dotted_order": dotted,
+        "name": "r",
+        "run_type": "llm",
+    }
+    # The post names a project, as an evaluation or an explicit caller would.
+    client.multipart_ingest(create=[{**base, "inputs": {"a": 1}, "session_name": "p"}])
+    post = _wait_for_part(session, "post")
+    client.multipart_ingest(update=[{**base, "outputs": {"b": 2}}])
+    patch = _wait_for_part(session, "patch")
+
+    assert post.get("session_name") == "p"
+    assert "agent_id" not in post
+    # The patch inherits the post's target by naming nothing at all.
+    assert "agent_id" not in patch
+    assert "agent_environment" not in patch
+
+
+class TestAgentAddressingWarnsOnce:
+    """The beta disclaimer has to reach a caller who never read a docstring.
+
+    Emitted where the addressing is settled, so it tracks runs that are
+    actually agent-addressed rather than an env var that may go unused.
+    """
+
+    def test_a_project_addressed_run_stays_quiet(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clean_agent_env(monkeypatch, LANGSMITH_PROJECT="proj")
+        payload: dict = {"session_name": "proj"}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", LangSmithBetaWarning)
+            _agent_addressing.apply_to_payload(payload)
+        assert payload == {"session_name": "proj"}
+
+
+class TestFeedbackAgentAddressing:
+    """A `feedback.<id>` part is addressed by agent or by project, never both."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            # Each of these is rejected by the endpoint, not the SDK.
+            {"agent_id": "my-agent", "session_id": uuid.UUID(int=1)},
+            # `project_id` is deliberately absent: a pre-existing guard already
+            # rejects it alongside `run_id`, for reasons unrelated to agents.
+            {"agent_id": "my-agent"},
+            {"agent_environment": "staging"},
+        ],
+    )
+    def test_create_feedback_never_rejects_addressing(self, kwargs: dict) -> None:
+        """No client-side validation; the endpoint answers with a 400."""
+        session = mock.Mock()
+        session.request = mock.Mock()
+        client = Client(api_url="http://localhost:1984", api_key="123", session=session)
+        with (
+            mock.patch.object(ls_client, "_check_feedback_session_id"),
+            mock.patch.object(Client, "_should_sample", return_value=False),
+        ):
+            client.create_feedback(
+                run_id=uuid.uuid4(),
+                key="correctness",
+                score=1,
+                trace_id=uuid.uuid4(),
+                **kwargs,
+            )
+
+    @pytest.mark.parametrize(
+        ("kwargs", "expected_agent"),
+        [
+            ({"agent_id": "my-agent"}, {"agent_id": "my-agent"}),
+            ({"agent_environment": "staging"}, {"agent_environment": "staging"}),
+        ],
+    )
+    def test_half_an_agent_pair_is_forwarded(self, kwargs: dict, expected_agent: dict) -> None:
+        """Forwarded so the endpoint answers, not dropped onto another project."""
+        serialized = _operations.serialize_feedback_dict(
+            {
+                "id": uuid.uuid4(),
+                "trace_id": uuid.uuid4(),
+                "key": "correctness",
+                "score": 1,
+                **kwargs,
+            }
+        )
+        body = json.loads(serialized.feedback)
+        assert {key: body[key] for key in ("agent_id", "agent_environment") if key in body} == expected_agent
+
+    def test_unset_agent_fields_are_omitted_not_nulled(self) -> None:
+        """A null must not read as "provided" to the endpoint."""
+        serialized = _operations.serialize_feedback_dict(
+            {
+                "id": uuid.uuid4(),
+                "trace_id": uuid.uuid4(),
+                "key": "correctness",
+                "score": 1,
+            }
+        )
+        body = json.loads(serialized.feedback)
+        assert "agent_id" not in body
+        assert "agent_environment" not in body
+
+    def test_agent_addressing_reaches_the_feedback_part(self) -> None:
+        serialized = _operations.serialize_feedback_dict(
+            {
+                "id": uuid.uuid4(),
+                "trace_id": uuid.uuid4(),
+                "key": "correctness",
+                "score": 1,
+                "agent_id": "my-agent",
+                "agent_environment": "staging",
+            }
+        )
+        body = json.loads(serialized.feedback)
+        assert (body["agent_id"], body["agent_environment"]) == (
+            "my-agent",
+            "staging",
+        )

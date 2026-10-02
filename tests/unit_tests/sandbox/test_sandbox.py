@@ -1,0 +1,559 @@
+"""Tests for Sandbox class."""
+
+from unittest.mock import MagicMock
+
+import pytest
+from pytest_httpx import HTTPXMock
+
+from langsmith.sandbox import (
+    DataplaneNotConfiguredError,
+    ResourceNotFoundError,
+    SandboxClient,
+    SandboxConnectionError,
+    SandboxNotReadyError,
+    ServiceURL,
+)
+from langsmith.sandbox._sandbox import Sandbox
+
+from ._sse_fixtures import SSE_HEADERS, exited, out, sse_bytes, started
+
+EXEC_URL = "https://sandbox-router.example.com/sb-123/execute/stream/start"
+
+
+def sse_response(httpx_mock: HTTPXMock, *events: tuple[str, object]) -> None:
+    """Queue an SSE exec stream for the sandbox's start endpoint."""
+    httpx_mock.add_response(method="POST", url=EXEC_URL, content=sse_bytes(*events), headers=SSE_HEADERS)
+
+
+@pytest.fixture(autouse=True)
+def sse_exec(monkeypatch):
+    """run() needs a transport; these tests use SSE rather than a live socket."""
+    monkeypatch.setenv("LANGSMITH_EXPERIMENTAL_FEATURES", "sandbox_sse_exec")
+    monkeypatch.setattr("langsmith.sandbox._sse_execute._resume_delay", lambda _: 0.0)
+
+
+@pytest.fixture
+def client():
+    """Create a SandboxClient with retries disabled for test isolation."""
+    return SandboxClient(api_endpoint="http://test-server:8080", max_retries=0)
+
+
+@pytest.fixture
+def sandbox(client: SandboxClient):
+    """Create a Sandbox instance."""
+    return Sandbox.from_dict(
+        data={
+            "name": "test-sandbox",
+            "dataplane_url": "https://sandbox-router.example.com/sb-123",
+        },
+        client=client,
+        auto_delete=False,
+    )
+
+
+class TestSandboxProperties:
+    """Tests for Sandbox properties."""
+
+    def test_name_property(self, sandbox):
+        """Test name property."""
+        assert sandbox.name == "test-sandbox"
+
+    def test_dataplane_url_property(self, sandbox):
+        """Test dataplane_url property."""
+        assert sandbox.dataplane_url == "https://sandbox-router.example.com/sb-123"
+
+
+class TestSandboxRetentionFields:
+    """Tests for the two-stage retention fields on Sandbox."""
+
+    def test_from_dict_with_retention(self, client):
+        """from_dict parses idle_ttl_seconds, delete_after_stop_seconds,
+        and stopped_at."""
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "idle_ttl_seconds": 600,
+                "delete_after_stop_seconds": 86400,
+                "stopped_at": "2026-03-24T12:00:00Z",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.idle_ttl_seconds == 600
+        assert sb.delete_after_stop_seconds == 86400
+        assert sb.stopped_at == "2026-03-24T12:00:00Z"
+
+    def test_from_dict_without_retention(self, client):
+        """Retention fields default to None when absent."""
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.idle_ttl_seconds is None
+        assert sb.delete_after_stop_seconds is None
+        assert sb.stopped_at is None
+
+    def test_from_dict_with_zero_retention(self, client):
+        """Zero values are preserved (each disables that retention stage)."""
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "idle_ttl_seconds": 0,
+                "delete_after_stop_seconds": 0,
+                "stopped_at": None,
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.idle_ttl_seconds == 0
+        assert sb.delete_after_stop_seconds == 0
+        assert sb.stopped_at is None
+
+    def test_from_dict_silently_ignores_legacy_fields(self, client):
+        """Older smith-go responses may include the now-removed
+        ttl_seconds/expires_at fields; the SDK should silently drop them
+        rather than fail."""
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "ttl_seconds": 3600,
+                "expires_at": "2026-03-24T12:00:00Z",
+                "idle_ttl_seconds": 600,
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.idle_ttl_seconds == 600
+        assert sb.delete_after_stop_seconds is None
+        assert sb.stopped_at is None
+        assert not hasattr(sb, "ttl_seconds")
+        assert not hasattr(sb, "expires_at")
+
+
+class TestSandboxStatusFields:
+    """Tests for status fields on Sandbox."""
+
+    def test_from_dict_with_status(self, client):
+        """Test from_dict parses status fields."""
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "status": "provisioning",
+                "status_message": None,
+                "dataplane_url": "https://sandbox-router.example.com/sb-123",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.status == "provisioning"
+        assert sb.status_message is None
+
+    def test_from_dict_failed_status(self, client):
+        """Test from_dict parses failed status with message."""
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "status": "failed",
+                "status_message": "No capacity available",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.status == "failed"
+        assert sb.status_message == "No capacity available"
+
+    def test_from_dict_defaults_to_ready(self, client):
+        """Test from_dict defaults status to 'ready' when absent."""
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.status == "ready"
+        assert sb.status_message is None
+
+    def test_dataplane_op_not_gated_on_status(self, client, httpx_mock: HTTPXMock):
+        """The client does not pre-check status: a stopped sandbox still runs;
+        the platform resumes it when the dataplane request arrives."""
+        sse_response(httpx_mock, started(), ("stdout", out(0, b"ok\n")), exited())
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "status": "stopped",
+                "dataplane_url": "https://sandbox-router.example.com/sb-123",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        assert sb.run("echo ok").stdout == "ok\n"
+
+    def test_missing_dataplane_url_raises_regardless_of_status(self, client):
+        """Without a dataplane_url, dataplane ops raise
+        DataplaneNotConfiguredError — the only client-side precondition."""
+        sb = Sandbox.from_dict(
+            data={"name": "test-sandbox", "status": "stopped"},
+            client=client,
+            auto_delete=False,
+        )
+        with pytest.raises(DataplaneNotConfiguredError):
+            sb.run("echo hello")
+        with pytest.raises(DataplaneNotConfiguredError):
+            sb.write("/tmp/test.txt", "hello")
+        with pytest.raises(DataplaneNotConfiguredError):
+            sb.read("/tmp/test.txt")
+
+    def test_stop_preserves_dataplane_url(self, client, httpx_mock: HTTPXMock):
+        """stop() must not clear dataplane_url: it stays valid across
+        stop/start and a request on it resumes the sandbox."""
+        httpx_mock.add_response(
+            method="POST",
+            url="http://test-server:8080/boxes/test-sandbox/stop",
+            json={},
+        )
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "status": "ready",
+                "dataplane_url": "https://sandbox-router.example.com/sb-123",
+            },
+            client=client,
+            auto_delete=False,
+        )
+        sb.stop()
+        assert sb.status == "stopped"
+        assert sb.dataplane_url == "https://sandbox-router.example.com/sb-123"
+
+
+class TestSandboxRun:
+    """Sandbox.run() over the SSE exec transport.
+
+    These cases pin the request shaping and error mapping of
+    /execute/stream/start, which run() uses when the SSE feature is on.
+    """
+
+    def test_run_command_success(self, sandbox, httpx_mock: HTTPXMock):
+        sse_response(httpx_mock, started(), ("stdout", out(0, b"hello world\n")), exited(0))
+
+        result = sandbox.run("echo hello world")
+
+        assert result.stdout == "hello world\n"
+        assert result.stderr == ""
+        assert result.exit_code == 0
+        assert result.success is True
+
+    def test_run_command_failure(self, sandbox, httpx_mock: HTTPXMock):
+        sse_response(
+            httpx_mock,
+            started(),
+            ("stderr", out(0, b"command not found\n")),
+            exited(127),
+        )
+
+        result = sandbox.run("nonexistent-command")
+
+        assert result.exit_code == 127
+        assert result.success is False
+
+    def test_run_connection_error(self, sandbox, httpx_mock: HTTPXMock):
+        """A dial that keeps failing is retried, then reported."""
+        import httpx
+
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"), is_reusable=True)
+
+        with pytest.raises(SandboxConnectionError):
+            sandbox.run("echo hello")
+
+    def test_run_starting_sandbox_raises_not_ready(self, sandbox, httpx_mock: HTTPXMock):
+        """Router startup refusals map to SandboxNotReadyError."""
+        httpx_mock.add_response(
+            method="POST",
+            url=EXEC_URL,
+            status_code=503,
+            json={
+                "detail": {
+                    "error": "ServiceUnavailable",
+                    "message": "Sandbox is starting: sb-123",
+                }
+            },
+        )
+
+        with pytest.raises(SandboxNotReadyError, match="Sandbox is starting"):
+            sandbox.run("echo hello")
+
+    def test_run_without_dataplane_url(self, client: SandboxClient):
+        sandbox = Sandbox.from_dict(
+            data={"name": "test-sandbox", "dataplane_url": None},
+            client=client,
+            auto_delete=False,
+        )
+
+        with pytest.raises(DataplaneNotConfiguredError) as exc_info:
+            sandbox.run("echo hello")
+
+        assert "test-sandbox" in str(exc_info.value)
+        assert "dataplane_url" in str(exc_info.value)
+
+    def test_run_with_env(self, sandbox, httpx_mock: HTTPXMock):
+        import json
+
+        sse_response(httpx_mock, started(), exited())
+
+        sandbox.run("echo $MY_VAR", env={"MY_VAR": "hello", "OTHER": "value"})
+
+        payload = json.loads(httpx_mock.get_request().content)
+        assert payload["env"] == {"MY_VAR": "hello", "OTHER": "value"}
+
+    def test_run_with_custom_headers(self, sandbox, httpx_mock: HTTPXMock):
+        sse_response(httpx_mock, started(), exited())
+
+        sandbox.run(
+            "echo hello",
+            headers={"X-Api-Key": "override-key", "X-Test-Header": "sandbox-run"},
+        )
+
+        request = httpx_mock.get_request()
+        assert request.headers.get("X-Api-Key") == "override-key"
+        assert request.headers.get("X-Test-Header") == "sandbox-run"
+
+    def test_run_with_cwd(self, sandbox, httpx_mock: HTTPXMock):
+        import json
+
+        sse_response(httpx_mock, started(), exited())
+
+        sandbox.run("pwd", cwd="/tmp")
+
+        assert json.loads(httpx_mock.get_request().content)["cwd"] == "/tmp"
+
+    def test_run_with_custom_shell(self, sandbox, httpx_mock: HTTPXMock):
+        import json
+
+        sse_response(httpx_mock, started(), exited())
+
+        sandbox.run("echo hello", shell="/bin/sh")
+
+        assert json.loads(httpx_mock.get_request().content)["shell"] == "/bin/sh"
+
+    def test_run_default_shell(self, sandbox, httpx_mock: HTTPXMock):
+        import json
+
+        sse_response(httpx_mock, started(), exited())
+
+        sandbox.run("echo hello")
+
+        assert json.loads(httpx_mock.get_request().content)["shell"] == "/bin/bash"
+
+
+class TestSandboxWrite:
+    """Tests for sandbox file write."""
+
+    def test_write_text_file(self, sandbox, httpx_mock: HTTPXMock):
+        """Test writing a text file."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/upload?path=%2Fapp%2Ftest.txt",
+            json={
+                "path": "/app/test.txt",
+                "written": 11,
+            },
+        )
+
+        # Should not raise
+        sandbox.write("/app/test.txt", "hello world")
+
+        # Verify request is multipart form
+        request = httpx_mock.get_request()
+        assert b"hello world" in request.content
+        content_type = request.headers.get("content-type", "")
+        assert content_type.startswith("multipart/form-data")
+
+    def test_write_binary_file(self, sandbox, httpx_mock: HTTPXMock):
+        """Test writing a binary file."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/upload?path=%2Fapp%2Fdata.bin",
+            json={
+                "path": "/app/data.bin",
+                "written": 4,
+            },
+        )
+
+        binary_data = b"\x00\x01\x02\x03"
+        sandbox.write("/app/data.bin", binary_data)
+
+        # Verify request is multipart form with binary content
+        request = httpx_mock.get_request()
+        assert binary_data in request.content
+        content_type = request.headers.get("content-type", "")
+        assert content_type.startswith("multipart/form-data")
+
+    def test_write_with_custom_headers(self, sandbox, httpx_mock: HTTPXMock):
+        """Test writing a file with per-request headers."""
+        httpx_mock.add_response(
+            method="POST",
+            url="https://sandbox-router.example.com/sb-123/upload?path=%2Fapp%2Ftest.txt",
+            json={"path": "/app/test.txt", "written": 5},
+        )
+
+        sandbox.write(
+            "/app/test.txt",
+            "hello",
+            headers={"X-Test-Header": "sandbox-write"},
+        )
+
+        request = httpx_mock.get_request()
+        assert request.headers.get("X-Test-Header") == "sandbox-write"
+
+    def test_write_without_dataplane_url(self, client: SandboxClient):
+        """Test write raises error when dataplane_url is not configured."""
+        sandbox = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "dataplane_url": None,
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        with pytest.raises(DataplaneNotConfiguredError) as exc_info:
+            sandbox.write("/app/test.txt", "hello")
+
+        assert "test-sandbox" in str(exc_info.value)
+
+
+class TestSandboxRead:
+    """Tests for sandbox file read."""
+
+    def test_read_text_file(self, sandbox, httpx_mock: HTTPXMock):
+        """Test reading a text file."""
+        # URL uses query parameter with encoded path
+        httpx_mock.add_response(
+            method="GET",
+            url="https://sandbox-router.example.com/sb-123/download?path=%2Fapp%2Ftest.txt",
+            content=b"hello world",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+        content = sandbox.read("/app/test.txt")
+
+        assert content == b"hello world"
+
+    def test_read_binary_file(self, sandbox, httpx_mock: HTTPXMock):
+        """Test reading a binary file."""
+        binary_data = b"\x00\x01\x02\x03"
+
+        httpx_mock.add_response(
+            method="GET",
+            url="https://sandbox-router.example.com/sb-123/download?path=%2Fapp%2Fdata.bin",
+            content=binary_data,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+        content = sandbox.read("/app/data.bin")
+
+        assert content == binary_data
+
+    def test_read_file_not_found(self, sandbox, httpx_mock: HTTPXMock):
+        """Test reading non-existent file."""
+        httpx_mock.add_response(
+            method="GET",
+            url="https://sandbox-router.example.com/sb-123/download?path=%2Fapp%2Fnonexistent.txt",
+            json={"error": "NotFound", "message": "file not found"},
+            status_code=404,
+        )
+
+        with pytest.raises(ResourceNotFoundError):
+            sandbox.read("/app/nonexistent.txt")
+
+    def test_read_without_dataplane_url(self, client: SandboxClient):
+        """Test read raises error when dataplane_url is not configured."""
+        sandbox = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "dataplane_url": None,
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        with pytest.raises(DataplaneNotConfiguredError) as exc_info:
+            sandbox.read("/app/test.txt")
+
+        assert "test-sandbox" in str(exc_info.value)
+
+
+class TestSandboxContextManager:
+    """Tests for sandbox context manager."""
+
+    def test_auto_delete_on_exit(self, client: SandboxClient, httpx_mock: HTTPXMock):
+        """Test sandbox is deleted on context exit."""
+        httpx_mock.add_response(
+            method="DELETE",
+            url="http://test-server:8080/boxes/test-sandbox",
+            status_code=204,
+        )
+
+        sandbox = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+            },
+            client=client,
+            auto_delete=True,
+        )
+
+        with sandbox:
+            pass
+
+        # Verify delete was called
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 1
+        assert requests[0].method == "DELETE"
+
+    def test_no_delete_when_auto_delete_false(self, client: SandboxClient, httpx_mock: HTTPXMock):
+        """Test sandbox is not deleted when auto_delete is False."""
+        sandbox = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        with sandbox:
+            pass
+
+        # Verify no delete request
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 0
+
+
+class TestSandboxService:
+    """Tests for Sandbox.service() convenience method."""
+
+    def test_service_delegates_to_client(self, client: SandboxClient):
+        """Test service() calls client.service() with sandbox name."""
+        mock_svc = ServiceURL(
+            browser_url="http://b",
+            service_url="http://s/",
+            token="t",
+            expires_at="2026-04-01T12:10:00Z",
+        )
+        client.service = MagicMock(return_value=mock_svc)  # type: ignore[method-assign]
+
+        sb = Sandbox.from_dict(
+            data={
+                "name": "test-sandbox",
+                "dataplane_url": "https://sandbox-router.example.com/sb-123",
+            },
+            client=client,
+            auto_delete=False,
+        )
+
+        result = sb.service(port=3000, expires_in_seconds=1800)
+
+        client.service.assert_called_once_with("test-sandbox", 3000, expires_in_seconds=1800, headers=None)
+        assert result is mock_svc
