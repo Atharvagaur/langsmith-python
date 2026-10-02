@@ -2,6 +2,12 @@
 
 This repo holds the LangSmith Python SDK: the hand-written client (tracing, run trees, evaluation, sandbox, wrappers, integrations) on top of a Stainless-generated REST client. Both live under `src/langsmith/`.
 
+## External contributor PRs
+
+Do not authorize GitHub Actions on external contributors' PRs.
+Follow [Taking over an external contributor's PR](CONTRIBUTING.md#taking-over-an-external-contributors-pr) when taking over one.
+Review before pushing, cherry-pick reviewed commits onto an internal branch, preserve contributor authorship, and open a replacement PR.
+
 ## Before opening a PR
 
 Run from the repo root:
