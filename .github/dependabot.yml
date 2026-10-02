@@ -1,8 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: "pip"
+  - package-ecosystem: "uv"
     directory: "/"
-    target-branch: "next"
+    target-branch: "main"
     schedule:
       interval: "monthly"
     groups:
@@ -19,7 +19,7 @@ updates:
           - "major"
   - package-ecosystem: "github-actions"
     directory: "/"
-    target-branch: "next"
+    target-branch: "main"
     schedule:
       interval: "monthly"
     groups:
