@@ -220,9 +220,7 @@ def serialize_run_dict(operation: Literal["post", "patch"], payload: dict) -> Se
 _DESTINATION_FIELDS = ("session_name", "session_id", "agent_id", "agent_environment")
 
 
-def _warn_if_destinations_differ(
-    kept: SerializedRunOperation, dropped: SerializedRunOperation
-) -> None:
+def _warn_if_destinations_differ(kept: SerializedRunOperation, dropped: SerializedRunOperation) -> None:
     """Warn when two posts share a run id but go to different destinations."""
     kept_dest, dropped_dest = _destination(kept), _destination(dropped)
     if kept_dest == dropped_dest:
@@ -246,20 +244,13 @@ def _destination(op: SerializedRunOperation) -> dict:
 def combine_serialized_queue_operations(
     ops: list[Union[SerializedRunOperation, SerializedFeedbackOperation]],
 ) -> list[Union[SerializedRunOperation, SerializedFeedbackOperation]]:
-<<<<<<< ours
-    create_ops_by_id = {op.id: op for op in ops if isinstance(op, SerializedRunOperation) and op.operation == "post"}
-    passthrough_ops: list[Union[SerializedRunOperation, SerializedFeedbackOperation]] = []
-=======
     create_ops_by_id: dict[uuid.UUID, SerializedRunOperation] = {}
     for op in ops:
         if isinstance(op, SerializedRunOperation) and op.operation == "post":
             if op.id in create_ops_by_id:
                 _warn_if_destinations_differ(op, create_ops_by_id[op.id])
             create_ops_by_id[op.id] = op
-    passthrough_ops: list[
-        Union[SerializedRunOperation, SerializedFeedbackOperation]
-    ] = []
->>>>>>> theirs
+    passthrough_ops: list[Union[SerializedRunOperation, SerializedFeedbackOperation]] = []
     for op in ops:
         if isinstance(op, SerializedRunOperation):
             if op.operation == "post":

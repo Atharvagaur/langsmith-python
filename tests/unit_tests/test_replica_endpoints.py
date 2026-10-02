@@ -1260,9 +1260,7 @@ class TestPrimaryReplicaOwnsOriginalIds:
         for operation in ("post", "patch"):
             ids = _ids_by_project(operation)
             assert ids["production"] == run.id
-            assert ids[self.OWN] == compute_run_id_for_secondary_replica(
-                run.id, self.OWN
-            )
+            assert ids[self.OWN] == compute_run_id_for_secondary_replica(run.id, self.OWN)
 
     def test_without_primary_own_project_keeps_original_ids(self):
         client = _capture_client()
