@@ -3166,23 +3166,10 @@ def test_validate_api_key_if_hosted_without_tracing(
     from langsmith import utils as ls_utils
 
     ls_utils.get_env_var.cache_clear()
-<<<<<<< ours
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        client_cls(api_url="https://api.smith.langchain.com")
-    # Other tests' background threads leak unrelated warnings (unclosed loop,
-    # blocked socket) into this window; only the API-key warning matters here.
-    missing_key = [x for x in w if issubclass(x.category, ls_utils.LangSmithMissingAPIKeyWarning)]
-    assert not missing_key, [str(x.message) for x in missing_key]
-=======
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ls_utils.LangSmithMissingAPIKeyWarning)
         client_cls(api_url="https://api.smith.langchain.com")
-    assert not any(
-        issubclass(warning.category, ls_utils.LangSmithMissingAPIKeyWarning)
-        for warning in caught
-    )
->>>>>>> theirs
+    assert not any(issubclass(warning.category, ls_utils.LangSmithMissingAPIKeyWarning) for warning in caught)
 
 
 class TestResolveTracingMode:
