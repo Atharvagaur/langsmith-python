@@ -1053,15 +1053,8 @@ class trace:
         inputs: Optional[dict] = None,
         extra: Optional[dict] = None,
         project_name: Optional[str] = None,
-<<<<<<< ours
-        address: Optional[Address] = None,
-        parent: Optional[Union[run_trees.RunTree, str, Mapping, Literal["ignore"]]] = None,
-=======
         address: Optional[str] = None,
-        parent: Optional[
-            Union[run_trees.RunTree, str, Mapping, Literal["ignore"]]
-        ] = None,
->>>>>>> theirs
+        parent: Optional[Union[run_trees.RunTree, str, Mapping, Literal["ignore"]]] = None,
         tags: Optional[list[str]] = None,
         metadata: Optional[Mapping[str, Any]] = None,
         client: Optional[ls_client.Client] = None,
@@ -1674,9 +1667,7 @@ def _setup_run(
     outer_project = _context._PROJECT_NAME.get()
     langsmith_extra = LangSmithExtra(**(langsmith_extra or {}))
     if langsmith_extra.get("address") is not None:
-        langsmith_extra["address"] = _agent_addressing.check_address(
-            langsmith_extra["address"]
-        )
+        langsmith_extra["address"] = _agent_addressing.check_address(langsmith_extra["address"])
     if "replicas" in langsmith_extra:
         langsmith_extra["replicas"] = _agent_addressing.normalize_replicas(langsmith_extra["replicas"])
     name = langsmith_extra.get("name") or container_input.get("name")

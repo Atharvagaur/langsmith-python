@@ -859,15 +859,7 @@ class RunTree(ls_schemas.RunBase):
             return run_dict
         # Runs are duplicated per destination, so the derivation seed has to
         # identify the destination -- an addressed replica has no project.
-<<<<<<< ours
-        seed = project_name if project_name is not None else (address._seed() if address is not None else "agent//")
-=======
-        seed = (
-            project_name
-            if project_name is not None
-            else (address if address is not None else "agent//")
-        )
->>>>>>> theirs
+        seed = project_name if project_name is not None else (address if address is not None else "agent//")
 
         if updates and updates.get("reroot", False):
             distributed_parent_id = _DISTRIBUTED_PARENT_ID.get()
@@ -923,13 +915,7 @@ class RunTree(ls_schemas.RunBase):
             dup.update(updates)
         return dup
 
-<<<<<<< ours
-    def _replica_addressing(self, replica: WriteReplica) -> tuple[Optional[str], Optional[Address]]:
-=======
-    def _replica_addressing(
-        self, replica: WriteReplica
-    ) -> tuple[Optional[str], Optional[str]]:
->>>>>>> theirs
+    def _replica_addressing(self, replica: WriteReplica) -> tuple[Optional[str], Optional[str]]:
         """Resolve one replica's `(project_name, address)`.
 
         Same precedence as everywhere else, applied per replica: the replica's
@@ -1397,19 +1383,13 @@ class _Baggage:
                             # A replica has to name a destination, but either
                             # mode counts. A malformed address is dropped here
                             # rather than raising downstream.
-                            replica_address = _address_from_header(
-                                cast(dict, filtered_replica).pop("address", None)
-                            )
+                            replica_address = _address_from_header(cast(dict, filtered_replica).pop("address", None))
                             if filtered_replica.get("project_name"):
                                 # Naming both would raise once resolved, and a
                                 # header must not be able to do that; the
                                 # project takes precedence, so drop the address.
                                 parsed_replicas.append(filtered_replica)
-<<<<<<< ours
-                            elif (replica_address := _address_from_header(replica_wire)) is not None:
-=======
                             elif replica_address is not None:
->>>>>>> theirs
                                 filtered_replica["address"] = replica_address
                                 parsed_replicas.append(filtered_replica)
                         else:
@@ -1457,16 +1437,10 @@ def _address_from_header(value: Any) -> Optional[str]:
     if value is None:
         return None
     try:
-<<<<<<< ours
-        return Address._from_wire({k: v for k, v in wire.items() if k in Address._wire_keys()})
-    except (utils.LangSmithUserError, TypeError) as e:
-        logger.warning("Ignoring an unusable address in a `baggage` header: %s", e)
-=======
         return _address.parse(value)
     except utils.LangSmithUserError:
         # The value is untrusted, so it is not logged.
         logger.warning("Ignoring an unusable address in a `baggage` header.")
->>>>>>> theirs
         return None
 
 

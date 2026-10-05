@@ -126,13 +126,7 @@ def first_named(*tiers: Tier) -> Tier:
     return None, None
 
 
-<<<<<<< ours
-def _both_at_one_level(project: str, address: Address, where: str) -> utils.LangSmithUserError:
-=======
-def _both_at_one_level(
-    project: str, address: str, where: str
-) -> utils.LangSmithUserError:
->>>>>>> theirs
+def _both_at_one_level(project: str, address: str, where: str) -> utils.LangSmithUserError:
     return utils.LangSmithUserError(
         f"A project ({project!r}) and an address ({address!r}) are both set "
         f"{where}, so neither outranks the other. Set only one there, or set "

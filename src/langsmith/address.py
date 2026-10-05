@@ -22,9 +22,7 @@ Example:
     def handle(order): ...
 
 
-    with ls.tracing_context(
-        address="lrn:agents/customer-support/environments/staging"
-    ):
+    with ls.tracing_context(address="lrn:agents/customer-support/environments/staging"):
         handle(order)
     ```
 """
@@ -78,13 +76,10 @@ def agent(agent_id: str, agent_environment: str) -> Address:
             "or hyphens, start with a letter, and end with a letter or digit, "
             f"got {agent_id!r}. Use an id such as 'support-agent'."
         )
-    environment = (
-        agent_environment.lower() if isinstance(agent_environment, str) else None
-    )
+    environment = agent_environment.lower() if isinstance(agent_environment, str) else None
     if environment not in _ENVIRONMENTS:
         raise utils.LangSmithUserError(
-            f"Address environment must be one of {', '.join(_ENVIRONMENTS)}, "
-            f"got {agent_environment!r}."
+            f"Address environment must be one of {', '.join(_ENVIRONMENTS)}, got {agent_environment!r}."
         )
     return Address(f"lrn:agents/{agent_id}/environments/{environment}")
 
@@ -100,8 +95,7 @@ def parse(address: str) -> Address:
     match = _ADDRESS_PATTERN.fullmatch(address) if isinstance(address, str) else None
     if match is None:
         raise utils.LangSmithUserError(
-            "An address must be a string like "
-            f"'lrn:agents/{{id}}/environments/{{environment}}', got {address!r}."
+            f"An address must be a string like 'lrn:agents/{{id}}/environments/{{environment}}', got {address!r}."
         )
     return agent(*match.groups())
 
@@ -121,17 +115,11 @@ def from_env() -> Optional[Address]:
     missing = [name for name, value in values.items() if not value]
     try:
         if missing:
-            raise utils.LangSmithUserError(
-                f"An address needs {' and '.join(missing)} as well."
-            )
+            raise utils.LangSmithUserError(f"An address needs {' and '.join(missing)} as well.")
         return agent(*values.values())  # type: ignore[arg-type]
     except utils.LangSmithUserError as e:
-        present = ", ".join(
-            f"{name}={value!r}" for name, value in values.items() if value
-        )
-        raise EnvAddressError(
-            f"The LANGSMITH_AGENT_* env vars can't address a run ({present}): {e}"
-        ) from e
+        present = ", ".join(f"{name}={value!r}" for name, value in values.items() if value)
+        raise EnvAddressError(f"The LANGSMITH_AGENT_* env vars can't address a run ({present}): {e}") from e
 
 
 def env_values() -> dict[str, Optional[str]]:

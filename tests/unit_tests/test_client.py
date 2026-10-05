@@ -8057,13 +8057,7 @@ def test_batch_update_does_not_resolve_the_ambient_agent(
     they passed while `_run_transform` -- and so both batch paths -- stayed
     broken.
     """
-<<<<<<< ours
-    _clean_agent_env(monkeypatch, LANGSMITH_AGENT_ID="ag", LANGSMITH_AGENT_ENVIRONMENT="env")
-=======
-    _clean_agent_env(
-        monkeypatch, LANGSMITH_AGENT_ID="ag", LANGSMITH_AGENT_ENVIRONMENT="staging"
-    )
->>>>>>> theirs
+    _clean_agent_env(monkeypatch, LANGSMITH_AGENT_ID="ag", LANGSMITH_AGENT_ENVIRONMENT="staging")
     session = mock.Mock()
     session.request = mock.Mock()
     client = _multipart_client(session)
@@ -8105,60 +8099,7 @@ class TestAgentAddressingWarnsOnce:
 
 
 class TestFeedbackAgentAddressing:
-<<<<<<< ours
-    """A `feedback.<id>` part is addressed by agent or by project, never both."""
-
-    @pytest.mark.parametrize(
-        "kwargs",
-        [
-            # Each of these is rejected by the endpoint, not the SDK.
-            {"agent_id": "my-agent", "session_id": uuid.UUID(int=1)},
-            # `project_id` is deliberately absent: a pre-existing guard already
-            # rejects it alongside `run_id`, for reasons unrelated to agents.
-            {"agent_id": "my-agent"},
-            {"agent_environment": "staging"},
-        ],
-    )
-    def test_create_feedback_never_rejects_addressing(self, kwargs: dict) -> None:
-        """No client-side validation; the endpoint answers with a 400."""
-        session = mock.Mock()
-        session.request = mock.Mock()
-        client = Client(api_url="http://localhost:1984", api_key="123", session=session)
-        with (
-            mock.patch.object(ls_client, "_check_feedback_session_id"),
-            mock.patch.object(Client, "_should_sample", return_value=False),
-        ):
-            client.create_feedback(
-                run_id=uuid.uuid4(),
-                key="correctness",
-                score=1,
-                trace_id=uuid.uuid4(),
-                **kwargs,
-            )
-
-    @pytest.mark.parametrize(
-        ("kwargs", "expected_agent"),
-        [
-            ({"agent_id": "my-agent"}, {"agent_id": "my-agent"}),
-            ({"agent_environment": "staging"}, {"agent_environment": "staging"}),
-        ],
-    )
-    def test_half_an_agent_pair_is_forwarded(self, kwargs: dict, expected_agent: dict) -> None:
-        """Forwarded so the endpoint answers, not dropped onto another project."""
-        serialized = _operations.serialize_feedback_dict(
-            {
-                "id": uuid.uuid4(),
-                "trace_id": uuid.uuid4(),
-                "key": "correctness",
-                "score": 1,
-                **kwargs,
-            }
-        )
-        body = json.loads(serialized.feedback)
-        assert {key: body[key] for key in ("agent_id", "agent_environment") if key in body} == expected_agent
-=======
     """A `feedback.<id>` part is addressed by address or by project, never both."""
->>>>>>> theirs
 
     def test_an_unset_address_is_omitted_not_nulled(self) -> None:
         """A null must not read as "provided" to the endpoint."""

@@ -3674,16 +3674,9 @@ class Client:
             client.update_run(run["id"], **run)
             ```
         """
-<<<<<<< ours
         replica_auths: Optional[Sequence[ReplicaAuth]] = kwargs.pop("_replica_auths", None)
-        _agent_addressing.check_address(kwargs.get("address"))
-=======
-        replica_auths: Optional[Sequence[ReplicaAuth]] = kwargs.pop(
-            "_replica_auths", None
-        )
         if kwargs.get("address") is not None:
             kwargs["address"] = _agent_addressing.check_address(kwargs["address"])
->>>>>>> theirs
         data: dict[str, Any] = {
             "id": _as_uuid(run_id, "run_id"),
             "name": name,

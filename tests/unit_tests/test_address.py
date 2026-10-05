@@ -81,9 +81,7 @@ class TestConstructors:
 
     @pytest.mark.parametrize("agent_id", ["a", "a" * 63, "support-v2"])
     def test_valid_agent_ids(self, agent_id: str) -> None:
-        assert ls_address.agent(agent_id, "local") == (
-            f"lrn:agents/{agent_id}/environments/local"
-        )
+        assert ls_address.agent(agent_id, "local") == (f"lrn:agents/{agent_id}/environments/local")
 
     @pytest.mark.parametrize(
         ("agent_id", "error"),
@@ -97,34 +95,19 @@ class TestConstructors:
             ("a/b", "agent id must be"),
         ],
     )
-<<<<<<< ours
-    def test_invalid_values_fail_at_construction(self, kwargs: dict, error: str) -> None:
-=======
     def test_invalid_agent_ids(self, agent_id: str, error: str) -> None:
->>>>>>> theirs
         with pytest.raises(ls_utils.LangSmithUserError, match=error):
             ls_address.agent(agent_id, "production")
 
-<<<<<<< ours
-    @pytest.mark.parametrize("agent_id", ["a", "a" * 63, "support-v2"])
-    def test_valid_agent_ids(self, agent_id: str) -> None:
-        assert ls.address(agent_id=agent_id, agent_environment="prod").agent_id == (agent_id)
-=======
     @pytest.mark.parametrize("environment", ["", "prod", "qa", "production/x"])
     def test_invalid_environments(self, environment: str) -> None:
         with pytest.raises(ls_utils.LangSmithUserError, match="environment must be"):
             ls_address.agent("support", environment)
->>>>>>> theirs
 
-    @pytest.mark.parametrize(
-        "environment", ["local", "development", "staging", "production"]
-    )
+    @pytest.mark.parametrize("environment", ["local", "development", "staging", "production"])
     def test_environments_are_lowercased(self, environment: str) -> None:
         for given in (environment, environment.upper(), environment.title()):
-            assert (
-                ls_address.agent("a", given)
-                == f"lrn:agents/a/environments/{environment}"
-            )
+            assert ls_address.agent("a", given) == f"lrn:agents/a/environments/{environment}"
             assert ls_address.parse(f"lrn:agents/a/environments/{given}") == (
                 f"lrn:agents/a/environments/{environment}"
             )
@@ -164,12 +147,6 @@ class TestConstructors:
         )
         assert ls_address.from_env() == STAGING
 
-<<<<<<< ours
-    def test_half_an_address_in_the_env_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_env(monkeypatch, LANGSMITH_AGENT_ID="a")
-        with pytest.raises(EnvAddressError, match="LANGSMITH_AGENT_ID='a'"):
-            ls.Address._from_env()
-=======
     @pytest.mark.parametrize(
         ("env", "match"),
         [
@@ -189,9 +166,7 @@ class TestConstructors:
         ],
         ids=["only_id", "only_environment", "bad_id", "bad_environment"],
     )
-    def test_from_env_rejects_half_or_invalid(
-        self, monkeypatch: pytest.MonkeyPatch, env: dict, match: str
-    ) -> None:
+    def test_from_env_rejects_half_or_invalid(self, monkeypatch: pytest.MonkeyPatch, env: dict, match: str) -> None:
         _set_env(monkeypatch, **env)
         with pytest.raises(EnvAddressError, match=match):
             ls_address.from_env()
@@ -203,7 +178,6 @@ class TestConstructors:
     def test_the_old_handle_api_is_gone(self) -> None:
         assert not callable(ls.address)
         assert not hasattr(ls_address, "with_agent_environment")
->>>>>>> theirs
 
     @pytest.mark.parametrize("value", ["support", 42])
     def test_entry_points_reject_a_malformed_string(self, value: Any) -> None:
@@ -610,13 +584,7 @@ class TestWire:
         _agent_addressing.apply_to_payload(payload)
         assert payload == {"name": "r", "session_name": "p"}
 
-<<<<<<< ours
-    def test_an_update_does_not_read_the_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_env(monkeypatch, LANGSMITH_AGENT_ID="a", LANGSMITH_AGENT_ENVIRONMENT="e")
-=======
-    def test_the_env_fills_in_an_unaddressed_post(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_the_env_fills_in_an_unaddressed_post(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_env(
             monkeypatch,
             LANGSMITH_AGENT_ID="support",
@@ -626,15 +594,12 @@ class TestWire:
         _agent_addressing.apply_to_payload(payload)
         assert payload == {"id": "x", "address": STAGING}
 
-    def test_an_update_does_not_read_the_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_an_update_does_not_read_the_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_env(
             monkeypatch,
             LANGSMITH_AGENT_ID="support",
             LANGSMITH_AGENT_ENVIRONMENT="staging",
         )
->>>>>>> theirs
         payload: dict = {"id": "x"}
         _agent_addressing.apply_to_payload(payload, update=True)
         assert "address" not in payload
@@ -650,9 +615,7 @@ class TestWire:
         )
 
     def test_feedback_carries_one_lowercase_string(self) -> None:
-        dumped = self._feedback(
-            "lrn:agents/support/environments/PRODUCTION"
-        ).model_dump(exclude_none=True)
+        dumped = self._feedback("lrn:agents/support/environments/PRODUCTION").model_dump(exclude_none=True)
         assert dumped["address"] == SUPPORT
         assert "agent_id" not in dumped
 
