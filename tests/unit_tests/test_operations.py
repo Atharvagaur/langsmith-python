@@ -234,7 +234,5 @@ def test_destination_fields_cover_address() -> None:
     from langsmith._internal import _agent_addressing
 
     payload: dict = {}
-    _agent_addressing.apply_to_payload(
-        payload | {"address": "lrn:agents/a/environments/local"}
-    )
+    _agent_addressing.apply_to_payload(payload | {"address": "lrn:agents/a/environments/local"})
     assert set(payload) <= set(_DESTINATION_FIELDS)

@@ -1179,9 +1179,7 @@ class TestAsyncHandshakeFailureWrapping:
             "langsmith.sandbox._ws_execute._ensure_websockets_async",
             return_value=(connect, ConnectionClosedError, InvalidHandshake),
         ):
-            msg_stream, _ = await run_ws_stream_async(
-                "https://sb.example.com", "key", "echo hi"
-            )
+            msg_stream, _ = await run_ws_stream_async("https://sb.example.com", "key", "echo hi")
             with pytest.raises(
                 SandboxRetryableConnectionError,
                 match="no close frame received or sent",
