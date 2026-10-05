@@ -87,7 +87,7 @@ def _build_dummy_agents():
 @pytest.fixture
 def mock_ls_client() -> Client:
     mock_session = mock.MagicMock()
-    return Client(session=mock_session, info=LS_TEST_CLIENT_INFO)
+    return Client(api_url="http://localhost:1984", api_key="test", session=mock_session, info=LS_TEST_CLIENT_INFO)
 
 
 def _build_runner_sync(agent):

@@ -28,6 +28,11 @@ async def _allow_all(tool_name, tool_input, context):  # type: ignore[no-untyped
     )
 
 
+def _assert_provider_success(message):
+    if isinstance(message, claude_agent_sdk.ResultMessage):
+        assert not message.is_error, f"Claude request failed before trace assertions: {message.subtype}"
+
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
@@ -50,6 +55,7 @@ async def test_tool_failure_creates_error_trace():
     async with claude_agent_sdk.ClaudeSDKClient(options=options) as client:
         await client.query("Run this exact bash command: cat /tmp/__langsmith_test_nonexistent.txt")
         async for msg in client.receive_response():
+            _assert_provider_success(msg)
             if type(msg).__name__ == "UserMessage" and hasattr(msg, "content"):
                 for block in msg.content:
                     if type(block).__name__ == "ToolResultBlock":
@@ -117,7 +123,7 @@ async def test_subagent():
         async with ClaudeSDKClient(options=options) as client:
             await client.query("Call foo and tell me exactly what it returns.")
             async for message in client.receive_response():
-                pass
+                _assert_provider_success(message)
 
     # All hook state should be cleaned up
     assert len(_hooks_module._default_session.active_tool_runs) == 0
@@ -181,6 +187,7 @@ async def test_continue_session():
     async with claude_agent_sdk.ClaudeSDKClient(options=options) as client:
         await client.query("Say hello.")
         async for msg in client.receive_response():
+            _assert_provider_success(msg)
             sid = getattr(msg, "session_id", None)
             if sid:
                 session_id = str(sid)
@@ -213,6 +220,7 @@ async def test_continue_session():
         async with claude_agent_sdk.ClaudeSDKClient(options=continue_options) as client:
             await client.query("Say goodbye.")
             async for msg in client.receive_response():
+                _assert_provider_success(msg)
                 pass
 
     assert len(_hooks_module._default_session.active_tool_runs) == 0
@@ -259,6 +267,7 @@ async def test_custom_tool_permission_denied():
     async with claude_agent_sdk.ClaudeSDKClient(options=options) as client:
         await client.query("What's the weather in San Francisco?")
         async for msg in client.receive_response():
+            _assert_provider_success(msg)
             if type(msg).__name__ == "AssistantMessage" and hasattr(msg, "content"):
                 for block in msg.content:
                     if type(block).__name__ == "ToolUseBlock":
@@ -319,6 +328,7 @@ async def test_custom_tool_permission_granted():
     async with ClaudeSDKClient(options=options) as client:
         await client.query("What's the weather in San Francisco?")
         async for msg in client.receive_response():
+            _assert_provider_success(msg)
             if type(msg).__name__ == "AssistantMessage" and hasattr(msg, "content"):
                 for block in msg.content:
                     if type(block).__name__ == "ToolUseBlock":
@@ -388,6 +398,7 @@ async def test_concurrent_three_clients_are_isolated():
         async with ClaudeSDKClient(options=options) as client:
             await client.query(f"Run the exact command: echo {label}")
             async for msg in client.receive_response():
+                _assert_provider_success(msg)
                 sid = getattr(msg, "session_id", None)
                 if sid:
                     session_ids_seen.add(str(sid))

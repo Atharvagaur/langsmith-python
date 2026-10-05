@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import httpx
 import pytest
 from pydantic import BaseModel
 
@@ -87,14 +88,50 @@ async def test_chat_async_api(stream: bool):
         assert call[0][0].upper() == "POST"
 
 
+@pytest.fixture
+def legacy_completions_transport():
+    """Exercise the retired completions protocol without a live model."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/completions"
+        body = json.loads(request.content)
+        payload = {
+            "id": "cmpl-test",
+            "object": "text_completion",
+            "created": 0,
+            "model": body["model"],
+            "choices": [{"text": "Foo", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+        }
+        if body.get("stream"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=f"data: {json.dumps(payload)}\n\ndata: [DONE]\n\n".encode(),
+            )
+        return httpx.Response(200, json=payload)
+
+    return httpx.MockTransport(respond)
+
+
 @pytest.mark.parametrize("stream", [False, True])
-def test_completions_sync_api(stream: bool):
+def test_completions_sync_api(stream: bool, legacy_completions_transport):
     import openai
 
     mock_session = mock.MagicMock()
     client = langsmith.Client(session=mock_session)
-    original_client = openai.Client()
-    patched_client = wrap_openai(openai.Client(), tracing_extra={"client": client})
+    original_client = openai.Client(
+        api_key="test",
+        base_url="https://openai.invalid/v1",
+        http_client=httpx.Client(transport=legacy_completions_transport),
+    )
+    patched_client = wrap_openai(
+        openai.Client(
+            api_key="test",
+            base_url="https://openai.invalid/v1",
+            http_client=httpx.Client(transport=legacy_completions_transport),
+        ),
+        tracing_extra={"client": client},
+    )
     prompt = ("Say 'Foo' then stop.",)
     original = original_client.completions.create(
         model="gpt-3.5-turbo-instruct",
@@ -118,7 +155,8 @@ def test_completions_sync_api(stream: bool):
         original_chunks = list(original)
         patched_chunks = list(patched)
         assert len(original_chunks) == len(patched_chunks)
-        assert [o.choices == p.choices for o, p in zip(original_chunks, patched_chunks)]
+        assert original_chunks
+        assert all(o.choices == p.choices for o, p in zip(original_chunks, patched_chunks))
         assert original.response
         assert patched.response
     else:
@@ -131,15 +169,23 @@ def test_completions_sync_api(stream: bool):
 
 
 @pytest.mark.parametrize("stream", [False, True])
-async def test_completions_async_api(stream: bool):
+async def test_completions_async_api(stream: bool, legacy_completions_transport):
     import openai
 
     mock_session = mock.MagicMock()
     client = langsmith.Client(session=mock_session)
 
-    original_client = openai.AsyncClient()
+    original_client = openai.AsyncClient(
+        api_key="test",
+        base_url="https://openai.invalid/v1",
+        http_client=httpx.AsyncClient(transport=legacy_completions_transport),
+    )
     patched_client = wrap_openai(
-        openai.AsyncClient(),
+        openai.AsyncClient(
+            api_key="test",
+            base_url="https://openai.invalid/v1",
+            http_client=httpx.AsyncClient(transport=legacy_completions_transport),
+        ),
         tracing_extra={"client": client},
         chat_name="chattychat",
         completions_name="incompletions",
@@ -171,7 +217,8 @@ async def test_completions_async_api(stream: bool):
         async for chunk in patched:
             patched_chunks.append(chunk)
         assert len(original_chunks) == len(patched_chunks)
-        assert [o.choices == p.choices for o, p in zip(original_chunks, patched_chunks)]
+        assert original_chunks
+        assert all(o.choices == p.choices for o, p in zip(original_chunks, patched_chunks))
         assert original.response
         assert patched.response
     else:

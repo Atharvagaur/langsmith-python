@@ -18,6 +18,7 @@ import time
 import urllib.parse
 import uuid
 import warnings
+from pathlib import Path
 import weakref
 from collections.abc import Generator
 from datetime import date, datetime, timezone
@@ -3140,10 +3141,14 @@ def test_select_eval_results(mock_session_cls: mock.Mock):
     clear=True,
 )
 def test_validate_api_key_if_hosted_with_tracing(
-    _mock_session: mock.Mock, client_cls: Union[Type[Client], Type[AsyncClient]]
+    _mock_session: mock.Mock,
+    client_cls: Union[Type[Client], Type[AsyncClient]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from langsmith import utils as ls_utils
 
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(tmp_path / "missing-config.json"))
     ls_utils.get_env_var.cache_clear()
     with pytest.warns(ls_utils.LangSmithMissingAPIKeyWarning):
         client_cls(api_url="https://api.smith.langchain.com")
@@ -3161,10 +3166,14 @@ def test_validate_api_key_if_hosted_with_tracing(
     clear=True,
 )
 def test_validate_api_key_if_hosted_without_tracing(
-    _mock_session: mock.Mock, client_cls: Union[Type[Client], Type[AsyncClient]]
+    _mock_session: mock.Mock,
+    client_cls: Union[Type[Client], Type[AsyncClient]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from langsmith import utils as ls_utils
 
+    monkeypatch.setenv("LANGSMITH_CONFIG_FILE", str(tmp_path / "missing-config.json"))
     ls_utils.get_env_var.cache_clear()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ls_utils.LangSmithMissingAPIKeyWarning)

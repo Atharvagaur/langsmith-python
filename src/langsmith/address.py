@@ -1,3 +1,4 @@
+# pyright: reportUnnecessaryIsInstance=false
 """Addresses that name where runs are sent.
 
 !!! warning "Beta"
