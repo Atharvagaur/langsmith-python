@@ -1,3 +1,7 @@
+# Contributing
+
+This is the development and generation repository for the LangSmith Python SDK. Changes are promoted to the production repository for releases.
+
 ## Taking over an external contributor's PR
 
 Do not authorize GitHub Actions on external contributors' PRs.
@@ -33,10 +37,6 @@ Open a maintainer-owned replacement PR so CI can run there.
 
 Review and cherry-pick any later contributor commits explicitly.
 Do not automatically sync unreviewed updates.
-
-# Contributing
-
-This is the development and generation repository for the LangSmith Python SDK. Changes are promoted to the production repository for releases.
 
 ## Set up the environment
 
@@ -85,6 +85,21 @@ chmod +x examples/my_example.py
 
 Examples call the configured LangSmith API, so set the endpoint and credentials for the environment you want to use.
 
+## Use a local build
+
+Build a wheel and install it into the environment you're testing:
+
+```sh
+uv build
+pip install dist/*.whl
+```
+
+To install directly from this repository, use:
+
+```sh
+pip install git+ssh://git@github.com/langchain-ai/langsmith-python-staging.git
+```
+
 ## Run checks
 
 Run unit tests:
@@ -111,18 +126,3 @@ Format and lint with:
 Open development changes against `langsmith-python-staging`. Include focused tests and update relevant examples or docs. Use conventional commit messages so release-please can prepare the changelog and version.
 
 Production releases are promoted and published from `langsmith-python`. Do not change package versions or publish directly from staging.
-
-## Use a local build
-
-Build a wheel and install it into the environment you're testing:
-
-```sh
-uv build
-pip install dist/*.whl
-```
-
-To install directly from this repository, use:
-
-```sh
-pip install git+ssh://git@github.com/langchain-ai/langsmith-python-staging.git
-```
