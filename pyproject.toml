@@ -1,7 +1,7 @@
 [project]
 name = "langsmith"
 version = "0.12.6"
-description = "The official Python library for the langChain API"
+description = "Client library to connect to the LangSmith Observability and Evaluation Platform."
 dynamic = ["readme"]
 license = "MIT"
 authors = [
@@ -129,12 +129,18 @@ vcr = ["vcrpy>=7.0.0"]
 # Kept for backward compatibility; `websockets` is now a core dependency.
 sandbox = []
 
+# Verify sandbox user tokens and proxy callback signatures.
+sandbox-auth = ["PyJWT[crypto]>=2.8.0"]
+
 [project.entry-points."pytest11"]
 langsmith_plugin = "langsmith.pytest_plugin"
 
 [tool.uv]
 managed = true
 required-version = ">=0.9"
+exclude-newer = "P7D"
+# livekit-agents pins an older json-repair; retain the source SDK's security floor.
+override-dependencies = ["json-repair>=0.60.1"]
 
 [dependency-groups]
 # version pins are in uv.lock
@@ -194,6 +200,7 @@ dev = [
     "wrapt>=1.16.0",
     "google-adk>=1.0.0",
     "pytest-timeout>=2.3.1",
+    "PyJWT[crypto]>=2.8.0",
 ]
 
 # Benchmarking dependencies (`make benchmark-codspeed`, `make benchmark-datadog`).

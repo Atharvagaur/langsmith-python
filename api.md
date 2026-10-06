@@ -1,9 +1,3 @@
-# Shared Types
-
-```python
-from langsmith.types import AgentAddress
-```
-
 # ProductFeedback
 
 Types:

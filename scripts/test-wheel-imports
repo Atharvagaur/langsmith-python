@@ -20,3 +20,14 @@ Langsmith(base_url='https://example.com', api_key='test').close()
 Client(api_url='https://example.com', api_key='test', auto_batch_tracing=False, info={}).close()
 print('wheel imports ok')
 "
+
+# Install the optional auth dependencies from the wheel metadata, not dev groups.
+wheel=(dist/langsmith-*.whl)
+uv pip install "${wheel[0]}[sandbox-auth]" --python "$VENV"
+"$VENV/bin/python" -c "
+from importlib.metadata import metadata
+from langsmith.sandbox._verify import _import_jwt
+assert 'sandbox-auth' in metadata('langsmith').get_all('Provides-Extra')
+_import_jwt()
+print('wheel sandbox-auth imports ok')
+"
