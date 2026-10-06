@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from langsmith import Client
+from langsmith._internal import _orjson
 from langsmith._internal.otel._otel_exporter import (
     GEN_AI_RESPONSE_FINISH_REASONS,
     GEN_AI_TOOL_CALL_ID,
@@ -429,7 +430,7 @@ def test_get_otlp_tracer_provider_passes_defaults_to_exporter(mock_utils, mock_i
     get_otlp_tracer_provider()
 
     MockExporter.assert_called_once_with(
-        endpoint="https://api.smith.langchain.com/otel",
+        endpoint="https://api.smith.langchain.com/otel/v1/traces",
         headers={"x-api-key": "lsv2_pt_test123", "Langsmith-Project": "my-project"},
     )
 
@@ -453,7 +454,7 @@ def test_get_otlp_tracer_provider_honors_env_overrides(mock_utils, mock_import):
         get_otlp_tracer_provider()
 
     MockExporter.assert_called_once_with(
-        endpoint="https://custom-collector:4318",
+        endpoint="https://custom-collector:4318/v1/traces",
         headers={"Authorization": "Bearer custom-token"},
     )
     # LangSmith utils should NOT have been called for key/endpoint
@@ -478,6 +479,105 @@ def test_get_otlp_tracer_provider_no_project(mock_utils, mock_import):
     get_otlp_tracer_provider()
 
     MockExporter.assert_called_once_with(
-        endpoint="https://api.smith.langchain.com/otel",
+        endpoint="https://api.smith.langchain.com/otel/v1/traces",
         headers={"x-api-key": "lsv2_pt_test123"},
     )
+
+
+@pytest.mark.parametrize(
+    ("endpoint_env", "expected_endpoint"),
+    [
+        ({}, "https://dev.api.smith.langchain.com/otel/v1/traces"),
+        (
+            {"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector:4318"},
+            "https://collector:4318/v1/traces",
+        ),
+        (
+            {"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector:4318/otel/"},
+            "https://collector:4318/otel/v1/traces",
+        ),
+        (
+            {"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector/otel/v1/traces"},
+            "https://collector/otel/v1/traces",
+        ),
+        (
+            {"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector/custom/traces"},
+            "https://collector/custom/traces",
+        ),
+        (
+            {"OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector/not-traces"},
+            "https://collector/not-traces/v1/traces",
+        ),
+        (
+            {"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector/custom/traces"},
+            "https://collector/custom/traces",
+        ),
+        (
+            {
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "https://ignored:4318/traces",
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector/otel/v1/traces",
+            },
+            "https://collector/otel/v1/traces",
+        ),
+    ],
+)
+def test_get_otlp_tracer_provider_resolves_real_exporter_endpoint(monkeypatch, endpoint_env, expected_endpoint):
+    from langsmith._internal.otel._otel_client import (
+        _warn_legacy_traces_endpoint,
+        get_otlp_tracer_provider,
+    )
+
+    _warn_legacy_traces_endpoint.cache_clear()
+    for name in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", "https://dev.api.smith.langchain.com")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
+    for name, value in endpoint_env.items():
+        monkeypatch.setenv(name, value)
+    env_before = dict(os.environ)
+
+    with (
+        patch("opentelemetry.sdk.trace.export.BatchSpanProcessor") as processor,
+        patch("langsmith._internal.otel._otel_client.warnings.warn") as warn,
+    ):
+        for _ in range(2):
+            provider = get_otlp_tracer_provider()
+            exporter = processor.call_args.args[0]
+            try:
+                assert exporter._endpoint == expected_endpoint
+                assert dict(os.environ) == env_before
+            finally:
+                exporter.shutdown()
+                provider.shutdown()
+        legacy_endpoint = endpoint_env.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+        should_warn = legacy_endpoint.endswith("/traces") and not endpoint_env.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+        assert warn.call_count == int(should_warn)
+        if should_warn:
+            assert "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" in warn.call_args.args[0]
+            assert "preserved unchanged" in warn.call_args.args[0]
+            assert "removed in the v1 release" in warn.call_args.args[0]
+    _warn_legacy_traces_endpoint.cache_clear()
+
+
+def test_io_attributes_are_str_not_bytes():
+    """Export input/output JSON strings regardless of OTel version."""
+    with patch("langsmith._internal.otel._otel_exporter._import_otel_exporter") as mock_import:
+        mock_import.return_value = (MagicMock(),) * 8
+        exporter = OTELExporter(span_ttl_seconds=1)
+
+    inputs = {"messages": [{"role": "user", "content": "こんにちは 🌍"}]}
+    outputs = {"generations": [[{"text": "café ✅"}]]}
+    span = MagicMock()
+    op = SimpleNamespace(
+        id=uuid.uuid4(),
+        inputs=_orjson.dumps(inputs),
+        outputs=_orjson.dumps(outputs),
+    )
+
+    exporter._set_io_attributes(span, op)
+
+    attrs = {call.args[0]: call.args[1] for call in span.set_attribute.call_args_list}
+    assert isinstance(attrs["gen_ai.prompt"], str)
+    assert isinstance(attrs["gen_ai.completion"], str)
+    assert json.loads(attrs["gen_ai.prompt"]) == inputs
+    assert json.loads(attrs["gen_ai.completion"]) == outputs

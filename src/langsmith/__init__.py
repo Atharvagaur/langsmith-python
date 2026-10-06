@@ -4,7 +4,7 @@
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
-    from langsmith._address import Address, address
+    from langsmith import address
     from langsmith._expect import expect
     from langsmith._exceptions import (
         APIConnectionError,
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         RateLimitError,
         UnprocessableEntityError,
     )
+    from langsmith.address import Address
     from langsmith.async_client import AsyncClient
     from langsmith.client import Client, TracingMode
     from langsmith.evaluation import (
@@ -167,11 +168,12 @@ def __getattr__(name: str) -> Any:
 
         return aevaluate_existing
     elif name == "address":
-        from langsmith._address import address
+        import importlib
 
-        return address
+        # `from langsmith import address` would re-enter this hook.
+        return importlib.import_module("langsmith.address")
     elif name == "Address":
-        from langsmith._address import Address
+        from langsmith.address import Address
 
         return Address
     elif name == "tracing_context":

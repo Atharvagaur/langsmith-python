@@ -217,7 +217,7 @@ def serialize_run_dict(operation: Literal["post", "patch"], payload: dict) -> Se
 
 
 # Allow-list of routing fields the collision warning may log; never credentials.
-_DESTINATION_FIELDS = ("session_name", "session_id", "agent_id", "agent_environment")
+_DESTINATION_FIELDS = ("session_name", "session_id", "address")
 
 
 def _warn_if_destinations_differ(kept: SerializedRunOperation, dropped: SerializedRunOperation) -> None:
