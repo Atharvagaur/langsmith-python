@@ -63,5 +63,6 @@
     "src/langsmith/_version.py"
   ],
   "versioning": "prerelease",
-  "prerelease-type": "rc.1"
+  "prerelease-type": "rc",
+  "release-as": "0.14.5-rc.1"
 }
