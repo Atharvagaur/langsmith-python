@@ -53,7 +53,7 @@ Keep staging promotion and publishing workflows separate from old-repo release w
 
 1. First publication must use release-please to select a version above the published source SDK version: 0.14.3 (staging is currently 0.12.6).
 2. Reconcile the manifest, pyproject.toml and src/langsmith/_version.py together through the release process. Do not copy skipped source version bumps manually.
-3. Confirm the intended stable/prerelease channel and finish the production publishing pipeline under LIN-505/LIN-506 before publishing. The readiness follow-up prepares stable releases; see release-readiness.md.
+3. Confirm the intended stable/prerelease channel and finish the production publishing pipeline under LIN-505/LIN-506 before publishing. Staging retains its current prerelease configuration.
 
 ## Validation
 
@@ -64,9 +64,3 @@ Keep staging promotion and publishing workflows separate from old-repo release w
 5. Ruff and pyright passed. Mypy reports the same nine errors in unchanged generated src/langsmith/_files.py as staging main. Bash syntax, YAML parsing and diff checks passed. actionlint is unavailable locally: its mise shim has no configured version.
 
 Logs are retained with the local reconciliation checkout. CI and live integrations remain required before release.
-
-## October 6 readiness follow-up
-
-Port the skipped source lock updates for anyio (4.15.1), httpx2/httpcore2 (2.13.1), livekit-agents (1.8.3) and google-genai (2.25.0). These versions match source `2fd05b9b113987a8c378f26b64492c86a56cbd4e`. Keep the current formatting/type-checking policy and existing dependency export unchanged.
-
-The readiness diff contains no SDK source, test, or `.gitignore` changes. See [release readiness](release-readiness.md) for publisher identity, the gateway blocker and the required merge strategy.
