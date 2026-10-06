@@ -62,7 +62,7 @@ source .venv/bin/activate
 
 Most of the SDK is generated from the LangSmith API definition by Stainless. Do not edit generated files directly. CI rejects changes to files marked `File generated from our OpenAPI spec by Stainless.`
 
-Handwritten Python code belongs in `src/langsmith/lib/` or `examples/`; generation does not overwrite those directories. Changes to generated API behavior should be made in the source API definition or Stainless configuration, with help from an SDK maintainer.
+Handwritten client code spans `src/langsmith/`, including `client.py`, `run_trees.py`, `evaluation/`, and `sandbox/`; the `stlc-seal-custom-code` workflow preserves it through regeneration. Check the generated-file marker before editing: marked files should be changed in the API definition or `stainless.yml`, not directly. Handwritten examples belong in `examples/`.
 
 ## Add or run an example
 
@@ -91,7 +91,7 @@ Build a wheel and install it into the environment you're testing:
 
 ```sh
 uv build
-pip install dist/*.whl
+uv pip install dist/*.whl
 ```
 
 To install directly from this repository, use:
