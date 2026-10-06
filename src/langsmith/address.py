@@ -1,4 +1,3 @@
-# pyright: reportUnnecessaryIsInstance=false
 """Addresses that name where runs are sent.
 
 !!! warning "Beta"
@@ -71,13 +70,13 @@ def agent(agent_id: str, agent_environment: str) -> Address:
     Raises:
         LangSmithUserError: If a value is invalid.
     """
-    if not isinstance(agent_id, str) or not _AGENT_ID_PATTERN.fullmatch(agent_id):
+    if not isinstance(agent_id, str) or not _AGENT_ID_PATTERN.fullmatch(agent_id):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise utils.LangSmithUserError(
             "Address agent id must be 1 to 63 lowercase ASCII letters, digits, "
             "or hyphens, start with a letter, and end with a letter or digit, "
             f"got {agent_id!r}. Use an id such as 'support-agent'."
         )
-    environment = agent_environment.lower() if isinstance(agent_environment, str) else None
+    environment = agent_environment.lower() if isinstance(agent_environment, str) else None  # pyright: ignore[reportUnnecessaryIsInstance]
     if environment not in _ENVIRONMENTS:
         raise utils.LangSmithUserError(
             f"Address environment must be one of {', '.join(_ENVIRONMENTS)}, got {agent_environment!r}."
@@ -93,7 +92,7 @@ def parse(address: str) -> Address:
     Raises:
         LangSmithUserError: If `address` is not a valid agent address.
     """
-    match = _ADDRESS_PATTERN.fullmatch(address) if isinstance(address, str) else None
+    match = _ADDRESS_PATTERN.fullmatch(address) if isinstance(address, str) else None  # pyright: ignore[reportUnnecessaryIsInstance]
     if match is None:
         raise utils.LangSmithUserError(
             f"An address must be a string like 'lrn:agents/{{id}}/environments/{{environment}}', got {address!r}."

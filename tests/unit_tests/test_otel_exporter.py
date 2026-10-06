@@ -522,8 +522,6 @@ def test_get_otlp_tracer_provider_no_project(mock_utils, mock_import):
     ],
 )
 def test_get_otlp_tracer_provider_resolves_real_exporter_endpoint(monkeypatch, endpoint_env, expected_endpoint):
-    from langsmith import utils as ls_utils
-
     from langsmith._internal.otel._otel_client import (
         _warn_legacy_traces_endpoint,
         get_otlp_tracer_provider,
@@ -536,7 +534,6 @@ def test_get_otlp_tracer_provider_resolves_real_exporter_endpoint(monkeypatch, e
     monkeypatch.setenv("LANGSMITH_API_KEY", "test-key")
     for name, value in endpoint_env.items():
         monkeypatch.setenv(name, value)
-    ls_utils.get_env_var.cache_clear()
     env_before = dict(os.environ)
 
     with (
@@ -560,7 +557,6 @@ def test_get_otlp_tracer_provider_resolves_real_exporter_endpoint(monkeypatch, e
             assert "preserved unchanged" in warn.call_args.args[0]
             assert "removed in the v1 release" in warn.call_args.args[0]
     _warn_legacy_traces_endpoint.cache_clear()
-    ls_utils.get_env_var.cache_clear()
 
 
 def test_io_attributes_are_str_not_bytes():
