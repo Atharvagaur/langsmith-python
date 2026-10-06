@@ -58,10 +58,10 @@ uv build
 uv pip install dist/*.whl
 ```
 
-To install directly from this repository, use:
+To install directly from the public production repository, use:
 
 ```sh
-pip install git+ssh://git@github.com/langchain-ai/langsmith-python-staging.git
+pip install git+ssh://git@github.com/langchain-ai/langsmith-python.git
 ```
 
 ## Run checks
