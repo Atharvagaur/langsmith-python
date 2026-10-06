@@ -521,13 +521,18 @@ def test_get_otlp_tracer_provider_no_project(mock_utils, mock_import):
         ),
     ],
 )
-def test_get_otlp_tracer_provider_resolves_real_exporter_endpoint(monkeypatch, endpoint_env, expected_endpoint):
+def test_get_otlp_tracer_provider_resolves_real_exporter_endpoint(
+    monkeypatch, endpoint_env, expected_endpoint, request
+):
+    from langsmith import utils as ls_utils
     from langsmith._internal.otel._otel_client import (
         _warn_legacy_traces_endpoint,
         get_otlp_tracer_provider,
     )
 
     _warn_legacy_traces_endpoint.cache_clear()
+    ls_utils.get_env_var.cache_clear()
+    request.addfinalizer(ls_utils.get_env_var.cache_clear)
     for name in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LANGSMITH_ENDPOINT", "https://dev.api.smith.langchain.com")
