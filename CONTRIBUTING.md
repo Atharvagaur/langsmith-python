@@ -1,157 +1,92 @@
-## Taking over an external contributor's PR
+# Contributing
 
-Do not authorize GitHub Actions on external contributors' PRs.
-Review the contribution, then cherry-pick reviewed commits onto an internal branch in `langchain-ai/langsmith-python-staging`.
-Open a maintainer-owned replacement PR so CI can run there.
+LangSmith SDK changes are developed in internal staging repositories and released from public production repositories.
 
-1. Review the original PR's complete diff and commit list before pushing.
-   Include code, tests, dependencies, scripts and workflows that CI would execute.
-   Moving code to an internal branch does not make it safe.
-2. Start from the latest target branch in a clean checkout.
-   Fetch the original PR's head and cherry-pick only reviewed commits, oldest first.
-   Replace `123` with the original PR number and `main` with its target branch.
-   Set the SHA variables to reviewed original commits; omit the second if unnecessary.
+## Set up the environment
 
-   ```bash
-   git fetch origin
-   git switch -c thibautlehmann/external-pr-123 origin/main
-   git fetch origin pull/123/head
-   git cherry-pick -x "$reviewed_commit_sha" "$next_reviewed_commit_sha"
-   ```
-
-   Use explicit commit SHAs, never a moving branch head.
-   `-x` records the source commit; cherry-picking preserves the contributor's authorship.
-   Resolve conflicts and review the resulting diff before continuing, or run `git cherry-pick --abort`.
-3. Review the final diff against the target branch and run the relevant local checks.
-   Push to this repository's `origin`, then open a replacement PR against the original target branch.
-   Link the original PR, credit the contributor and explain changes made during the takeover.
-   Agents should use their PR-creation tool when available.
-4. Run CI and obtain the usual review on the replacement PR.
-   Do not approve the original workflows or weaken CI security settings.
-   Link the replacement from the original PR.
-   Close the original as superseded once the replacement merges.
-
-Review and cherry-pick any later contributor commits explicitly.
-Do not automatically sync unreviewed updates.
-
-## Setting up the environment
-
-### With `uv`
-
-We use [uv](https://docs.astral.sh/uv/) to manage dependencies because it will automatically provision a Python environment with the expected Python version. To set it up, run:
+We use [uv](https://docs.astral.sh/uv/) to manage dependencies and the Python version. Run:
 
 ```sh
-$ ./scripts/bootstrap
+./scripts/bootstrap
 ```
 
-Or [install uv manually](https://docs.astral.sh/uv/getting-started/installation/) and run:
+You can also install uv manually and sync the project:
 
 ```sh
-$ uv sync --all-extras
+uv sync --all-extras
 ```
 
-You can then run scripts using `uv run python script.py` or by manually activating the virtual environment:
+Run Python commands with `uv run`, or activate the environment with:
 
 ```sh
-# manually activate - https://docs.python.org/3/library/venv.html#how-venvs-work
-$ source .venv/bin/activate
-
-# now you can omit the `uv run` prefix
-$ python script.py
+source .venv/bin/activate
 ```
 
-### Without `uv`
+## Make changes
 
-Alternatively if you don't want to install `uv`, you can stick with the standard `pip` setup by ensuring you have the Python version specified in `.python-version`, create a virtual environment however you desire and then install dependencies using this command:
+Most of the SDK is generated from the LangSmith API definition by Stainless. Do not edit generated files directly. CI rejects changes to files marked `File generated from our OpenAPI spec by Stainless.`
 
-```sh
-$ pip install -r requirements-dev.lock
-```
+Handwritten client code spans `src/langsmith/`, including `client.py`, `run_trees.py`, `evaluation/`, and `sandbox/`; the `stlc-seal-custom-code` workflow preserves it through regeneration. Check the generated-file marker before editing: marked files should be changed in the API definition or `stainless.yml`, not directly. Handwritten examples belong in `examples/`.
 
-## Modifying/Adding code
+## Add or run an example
 
-Most of the SDK is generated code. Modifications to code will be persisted between generations, but may
-result in merge conflicts between manual patches and changes from the generator. The generator will never
-modify the contents of the `src/langsmith/lib/` and `examples/` directories.
+Add an executable file under `examples/`, for example `examples/my_example.py`:
 
-## Adding and running examples
-
-All files in the `examples/` directory are not modified by the generator and can be freely edited or added to.
-
-```py
-# add an example to examples/<your-example>.py
-
+```python
 #!/usr/bin/env -S uv run python
-…
+
+from langsmith import Client
+
+client = Client()
 ```
+
+Then run it with:
 
 ```sh
-$ chmod +x examples/<your-example>.py
-# run the example against your api
-$ ./examples/<your-example>.py
+chmod +x examples/my_example.py
+./examples/my_example.py
 ```
 
-## Using the repository from source
+Examples call the configured LangSmith API, so set the endpoint and credentials for the environment you want to use.
 
-If you’d like to use the repository from source, you can either install from git or link to a cloned repository:
+## Use a local build
 
-To install via git:
+Build a wheel and install it into the environment you're testing:
 
 ```sh
-$ pip install git+ssh://git@github.com/langchain-ai/langsmith-python.git
+uv build
+uv pip install dist/*.whl
 ```
 
-Alternatively, you can build from source and install the wheel file:
-
-Building this package will create two files in the `dist/` directory, a `.tar.gz` containing the source files and a `.whl` that can be used to install the package efficiently.
-
-To create a distributable version of the library, all you have to do is run this command:
+To install directly from the public production repository, use:
 
 ```sh
-$ uv build
-# or
-$ python -m build
+pip install git+ssh://git@github.com/langchain-ai/langsmith-python.git
 ```
 
-Then to install:
+## Run checks
+
+Run unit tests:
 
 ```sh
-$ pip install ./path-to-wheel-file.whl
+./scripts/test
 ```
 
-## Running tests
+To run one test file:
 
 ```sh
-$ ./scripts/test
+TEST=tests/unit_tests/test_client.py ./scripts/test
 ```
 
-## Linting and formatting
-
-This repository uses [ruff](https://github.com/astral-sh/ruff) and
-[black](https://github.com/psf/black) to format the code in the repository.
-
-To lint:
+Format and lint with:
 
 ```sh
-$ ./scripts/lint
+./scripts/format
+./scripts/lint
 ```
 
-To format and fix all ruff issues automatically:
+## Open a pull request
 
-```sh
-$ ./scripts/format
-```
+External contributors should open issues and pull requests in the public `langsmith-python` repository. Staging is internal; maintainers review and port accepted changes while preserving contributor credit.
 
-## Publishing and releases
-
-Changes made to this repository via the automated release PR pipeline should publish to PyPI automatically. If
-the changes aren't made through the automated pipeline, you may want to make releases manually.
-
-### Publish with a GitHub workflow
-
-You can release to package managers by using [the `Publish PyPI` GitHub action](https://www.github.com/langchain-ai/langsmith-python/actions/workflows/publish-pypi.yml). This requires a setup organization or repository secret to be set up.
-
-### Publish manually
-
-If you need to manually release a package, you can run the `bin/publish-pypi` script with a `PYPI_TOKEN` set on
-the environment.
+Internal development PRs target `langsmith-python-staging`. Production releases are promoted and published from `langsmith-python`; do not change package versions or publish directly from staging.
