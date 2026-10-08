@@ -45,12 +45,12 @@ from typing_extensions import ParamSpec, TypeGuard, get_args, get_origin
 import langsmith._internal._context as _context
 from langsmith import client as ls_client
 from langsmith import run_trees, schemas, utils
-from langsmith._address import Address
-from langsmith._internal import _agent_addressing
+from langsmith._internal import _addressing
 from langsmith._internal import _aiter as aitertools
 from langsmith._runtime_overrides import (
     _aio_to_thread_override_active as _runtime_override_active,
 )
+from langsmith.address import AgentAddress
 from langsmith.env import _runtime_env
 from langsmith.run_trees import WriteReplica
 
@@ -172,13 +172,13 @@ def get_tracing_context(
 def tracing_context(
     *,
     project_name: Optional[str] = None,
-    address: Optional[Address] = None,
+    address: Optional[AgentAddress] = None,
     tags: Optional[list[str]] = None,
     metadata: Optional[dict[str, Any]] = None,
     parent: Optional[Union[run_trees.RunTree, Mapping, str, Literal[False]]] = None,
     enabled: Optional[Union[bool, Literal["local"]]] = None,
     client: Optional[ls_client.Client] = None,
-    replicas: Optional[Sequence[Union[WriteReplica, Address]]] = None,
+    replicas: Optional[Sequence[Union[WriteReplica, str]]] = None,
     distributed_parent_id: Optional[str] = None,
     **kwargs: Any,
 ) -> Generator[None, None, None]:
@@ -191,7 +191,7 @@ def tracing_context(
 
     Args:
         project_name: The name of the project to log the run to.
-        address: (beta) An `Address` from `langsmith.address`, to log the
+        address: (beta) An `AgentAddress`, such as `ls.AgentAddress(id, environment)`, to log the
             run to instead of a project. Cannot be combined with a project in
             the same call. Defaults to the `LANGSMITH_AGENT_*` env vars.
         tags: The tags to add to the run.
@@ -204,7 +204,7 @@ def tracing_context(
         enabled: Whether tracing is enabled.
 
             Defaults to `None`, meaning it will use the current context value or environment variables.
-        replicas: A sequence of `WriteReplica` dictionaries or `Address` handles
+        replicas: A sequence of `WriteReplica` dictionaries or addresses
             to send runs to.
 
             Example: `[{"api_url": "https://api.example.com", "auth": {"api_key": "key"}, "project_name": "proj"}]`
@@ -217,8 +217,8 @@ def tracing_context(
             f"Unrecognized keyword arguments: {kwargs}.",
             DeprecationWarning,
         )
-    address = _agent_addressing.check_address(address)
-    replicas = _agent_addressing.normalize_replicas(replicas)
+    address = _addressing.check_address(address)
+    replicas = _addressing.normalize_replicas(replicas)
     current_context = get_tracing_context()
     if project_name is not None and address == current_context.get("address"):
         # Restoring a snapshot, not naming a second destination:
@@ -227,7 +227,7 @@ def tracing_context(
         # arrives here looking exactly like typing both. The project named here
         # wins, as it does over any other ambient address.
         address = None
-    _agent_addressing.reject_conflicting(project=project_name, address=address)
+    _addressing.reject_conflicting(project=project_name, address=address)
     parent_run = (
         _get_parent_run({"parent": parent or kwargs.get("parent_run"), "replicas": replicas})
         if parent is not False
@@ -281,7 +281,7 @@ def ensure_traceable(
     client: Optional[ls_client.Client] = None,
     reduce_fn: Optional[Callable[[Sequence], Union[dict, str]]] = None,
     project_name: Optional[str] = None,
-    address: Optional[Address] = None,
+    address: Optional[AgentAddress] = None,
     process_inputs: Optional[Callable[[dict], dict]] = None,
     process_outputs: Optional[Callable[..., dict]] = None,
     process_chunk: Optional[Callable] = None,
@@ -325,8 +325,8 @@ class LangSmithExtra(TypedDict, total=False):
     """Optional run tree (deprecated)."""
     project_name: Optional[str]
     """Optional name of the project."""
-    address: Optional[Address]
-    """(beta) An `Address` to log the run to, instead of a project."""
+    address: Optional[AgentAddress]
+    """(beta) An `AgentAddress` to log the run to, instead of a project."""
     metadata: Optional[dict[str, Any]]
     """Optional metadata for the run."""
     tags: Optional[list[str]]
@@ -335,8 +335,8 @@ class LangSmithExtra(TypedDict, total=False):
     """Optional ID for the run."""
     client: Optional[ls_client.Client]
     """Optional LangSmith client."""
-    replicas: Optional[Sequence[Union[WriteReplica, Address]]]
-    """Optional write replicas (or `Address` handles) for the run and its descendants."""
+    replicas: Optional[Sequence[Union[WriteReplica, str]]]
+    """Optional write replicas (or addresses) for the run and its descendants."""
     # Optional callback function to be called if the run succeeds and before it is sent.
     _on_success: Optional[Callable[[run_trees.RunTree], None]]
     on_end: Optional[Callable[[run_trees.RunTree], Any]]
@@ -398,7 +398,7 @@ def traceable(
     client: Optional[ls_client.Client] = None,
     reduce_fn: Optional[Callable[[Sequence], Union[dict, str]]] = None,
     project_name: Optional[str] = None,
-    address: Optional[Address] = None,
+    address: Optional[AgentAddress] = None,
     process_inputs: Optional[Callable[[dict], dict]] = None,
     process_outputs: Optional[Callable[..., dict]] = None,
     process_chunk: Optional[Callable] = None,
@@ -444,7 +444,7 @@ def traceable(
         project_name: The name of the project to log the run to.
 
             Defaults to `None`, which will use the default project.
-        address: (beta) An `Address` from `langsmith.address`, to log the
+        address: (beta) An `AgentAddress`, such as `ls.AgentAddress(id, environment)`, to log the
             run to instead of a project. Cannot be combined with a project in
             the same call. Defaults to the `LANGSMITH_AGENT_*` env vars.
         process_inputs: Custom serialization / processing function for inputs.
@@ -627,7 +627,7 @@ def traceable(
         tags=kwargs.pop("tags", None),
         client=kwargs.pop("client", None),
         project_name=kwargs.pop("project_name", None),
-        address=_agent_addressing.check_address(kwargs.pop("address", None)),
+        address=_addressing.check_address(kwargs.pop("address", None)),
         run_type=run_type,
         process_inputs=kwargs.pop("process_inputs", None),
         process_chunk=kwargs.pop("process_chunk", None),
@@ -636,7 +636,7 @@ def traceable(
         enabled=enabled,
         exceptions_to_handle=kwargs.pop("exceptions_to_handle", None),
     )
-    _agent_addressing.reject_conflicting(project=container_input["project_name"], address=container_input["address"])
+    _addressing.reject_conflicting(project=container_input["project_name"], address=container_input["address"])
     outputs_processor = kwargs.pop("process_outputs", None)
     _on_run_end = functools.partial(
         _handle_container_end,
@@ -990,7 +990,7 @@ class trace:
         run_type: Type of run (e.g., `'chain'`, `'llm'`, `'tool'`).
         inputs: Initial input data for the run.
         project_name: Project name to associate the run with.
-        address: (beta) An `Address` from `langsmith.address`, to log the
+        address: (beta) An `AgentAddress`, such as `ls.AgentAddress(id, environment)`, to log the
             run to instead of a project. Cannot be combined with a project in
             the same call. Defaults to the `LANGSMITH_AGENT_*` env vars.
         parent: Parent run.
@@ -1054,7 +1054,7 @@ class trace:
         inputs: Optional[dict] = None,
         extra: Optional[dict] = None,
         project_name: Optional[str] = None,
-        address: Optional[Address] = None,
+        address: Optional[AgentAddress] = None,
         parent: Optional[Union[run_trees.RunTree, str, Mapping, Literal["ignore"]]] = None,
         tags: Optional[list[str]] = None,
         metadata: Optional[Mapping[str, Any]] = None,
@@ -1080,8 +1080,8 @@ class trace:
         self.inputs = inputs
         self.attachments = attachments
         self.extra = extra
-        self.address = _agent_addressing.check_address(address)
-        _agent_addressing.reject_conflicting(project=project_name, address=self.address)
+        self.address = _addressing.check_address(address)
+        _addressing.reject_conflicting(project=project_name, address=self.address)
         self.project_name = project_name
         self.parent = parent
         # The run tree is deprecated. Keeping for backwards compat.
@@ -1115,7 +1115,7 @@ class trace:
         client_ = self.client or self.old_ctx.get("client")
         parent_run_ = None
         project_name_: Optional[str] = "default"
-        address_: Optional[Address] = None
+        address_: Optional[AgentAddress] = None
         try:
             parent_run_ = _get_parent_run(
                 {
@@ -1132,11 +1132,11 @@ class trace:
                 project_name_, address_ = parent_run_.session_name, parent_run_.address
             else:
                 project_name_, address_ = _get_addressing(self.project_name, self.address, parent_run_)
-        except _agent_addressing.EnvAddressError as e:
+        except _addressing.EnvAddressError as e:
             # A bad environment must not break the block it would have traced:
             # the run tree is built but never sent.
             if enabled:
-                _agent_addressing.log_untraced(e)
+                _addressing.log_untraced(e)
             self._untraced = True
             enabled = False
             parent_run_ = None
@@ -1295,9 +1295,9 @@ def _get_project_name(project_name: Optional[str]) -> Optional[str]:
 
 def _get_addressing(
     project_name: Optional[str],
-    address: Optional[Address] = None,
+    address: Optional[AgentAddress] = None,
     parent: Optional[run_trees.RunTree] = None,
-) -> tuple[Optional[str], Optional[Address]]:
+) -> tuple[Optional[str], Optional[AgentAddress]]:
     """Resolve `(project_name, address)` for a new run.
 
     Mirrors `_get_project_name`'s levels, with `parent` (e.g. from headers)
@@ -1307,10 +1307,10 @@ def _get_addressing(
     tiers = list(_addressing_tiers(project_name, address))
     if parent is not None:
         tiers.insert(2, (parent.session_name, parent.address))
-    return _agent_addressing.resolve(*tiers)
+    return _addressing.resolve(*tiers)
 
 
-def _address_kwargs(tier: _agent_addressing.Tier) -> dict[str, Any]:
+def _address_kwargs(tier: _addressing.Tier) -> dict[str, Any]:
     """Render one level's `(project, address)` as `RunTree` keyword arguments."""
     project, address = tier
     if project:
@@ -1319,8 +1319,8 @@ def _address_kwargs(tier: _agent_addressing.Tier) -> dict[str, Any]:
 
 
 def _addressing_tiers(
-    project_name: Optional[str] = None, address: Optional[Address] = None
-) -> tuple[_agent_addressing.Tier, ...]:
+    project_name: Optional[str] = None, address: Optional[AgentAddress] = None
+) -> tuple[_addressing.Tier, ...]:
     """Return the levels named in code, highest first, without the env vars.
 
     The argument, a context variable, the current run tree, then
@@ -1484,7 +1484,7 @@ class _ContainerInput(TypedDict, total=False):
     client: Optional[ls_client.Client]
     reduce_fn: Optional[Callable]
     project_name: Optional[str]
-    address: Optional[Address]
+    address: Optional[AgentAddress]
     run_type: ls_client.RUN_TYPE_T
     process_inputs: Optional[Callable[[dict], dict]]
     process_chunk: Optional[Callable]
@@ -1578,7 +1578,7 @@ def _get_parent_run(
         # used for `project_name`: what nothing settles, the `RunTree`
         # validator resolves from the environment. A header's own destination
         # outranks it. Resolved only here, the one case that needs it.
-        named = _agent_addressing.first_named(
+        named = _addressing.first_named(
             *_addressing_tiers(langsmith_extra.get("project_name"), langsmith_extra.get("address"))
         )
     if isinstance(parent, Mapping):
@@ -1625,7 +1625,7 @@ def _resolve_traceable_addressing(
     parent_run_: Optional[run_trees.RunTree],
     langsmith_extra: LangSmithExtra,
     container_input: _ContainerInput,
-) -> tuple[Optional[str], Optional[Address]]:
+) -> tuple[Optional[str], Optional[AgentAddress]]:
     """Settle a `@traceable` run's `(project, address)`.
 
     One walk over the precedence levels, highest first: the first level naming
@@ -1634,7 +1634,7 @@ def _resolve_traceable_addressing(
     outranks an address on the decorator or in the env. `resolve` consults the
     env vars as the last level.
     """
-    return _agent_addressing.resolve(
+    return _addressing.resolve(
         # 1 · tracing_context
         (_context._PROJECT_NAME.get(), _context._ADDRESS.get()),
         # 2 · the parent run, e.g. from distributed-tracing headers
@@ -1667,23 +1667,25 @@ def _setup_run(
     dangerously_allow_filesystem = container_input.get("dangerously_allow_filesystem", False)
     outer_project = _context._PROJECT_NAME.get()
     langsmith_extra = LangSmithExtra(**(langsmith_extra or {}))
-    _agent_addressing.check_address(langsmith_extra.get("address"))
+    if langsmith_extra.get("address") is not None:
+        langsmith_extra["address"] = _addressing.check_address(langsmith_extra["address"])
     if "replicas" in langsmith_extra:
-        langsmith_extra["replicas"] = _agent_addressing.normalize_replicas(langsmith_extra["replicas"])
+        langsmith_extra["replicas"] = _addressing.normalize_replicas(langsmith_extra["replicas"])
     name = langsmith_extra.get("name") or container_input.get("name")
     client_ = langsmith_extra.get("client", client) or _context._CLIENT.get()
-    _agent_addressing.reject_conflicting(
+    _addressing.reject_conflicting(
         project=langsmith_extra.get("project_name"),
         address=langsmith_extra.get("address"),
     )
     reference_example_id = langsmith_extra.get("reference_example_id")
     id_ = langsmith_extra.get("run_id")
     enabled = container_input.get("enabled")
-    selected_project, selected_address = None, None
-    env_error: Optional[_agent_addressing.EnvAddressError] = None
+    selected_project: Optional[str] = None
+    selected_address: Optional[AgentAddress] = None
+    env_error: Optional[_addressing.EnvAddressError] = None
     try:
         parent_run_ = _get_parent_run({**langsmith_extra, "client": client_}, kwargs.get("config"))
-    except _agent_addressing.EnvAddressError as e:
+    except _addressing.EnvAddressError as e:
         parent_run_, env_error = None, e
     # Determine if tracing should be enabled for this function:
     # - enabled=False: never trace
@@ -1702,11 +1704,11 @@ def _setup_run(
             selected_project, selected_address = _resolve_traceable_addressing(
                 parent_run_, langsmith_extra, container_input
             )
-        except _agent_addressing.EnvAddressError as e:
+        except _addressing.EnvAddressError as e:
             env_error = e
     if tracing and env_error is not None:
         # A bad environment must not break the call it would have traced.
-        _agent_addressing.log_untraced(env_error)
+        _addressing.log_untraced(env_error)
         tracing = False
     if not tracing:
         utils.log_once(

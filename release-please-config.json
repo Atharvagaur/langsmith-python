@@ -5,7 +5,6 @@
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "include-v-in-tag": true,
   "include-component-in-tag": false,
-  "versioning": "prerelease",
   "prerelease": true,
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
@@ -62,5 +61,9 @@
   "release-type": "python",
   "extra-files": [
     "src/langsmith/_version.py"
-  ]
+  ],
+  "versioning": "prerelease",
+  "prerelease-type": "rc",
+  "release-as": "0.14.5-rc.1",
+  "bootstrap-sha": "9f34573c49368f4bf2bd32d651067b7404e54b27"
 }

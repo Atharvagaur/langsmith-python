@@ -14,3 +14,13 @@ dist
 .envrc
 codegen.log
 Brewfile.lock.json
+
+.env.*
+*.pem
+*.key
+*.crt
+credentials.json
+.DS_Store
+node_modules/
+__pycache__/
+.venv/

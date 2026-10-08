@@ -17,6 +17,7 @@ from langsmith import schemas as ls_schemas
 from langsmith import utils as ls_utils
 from langsmith._internal._multipart import RewindableMultipartBody
 from langsmith._internal._uuid import uuid7_deterministic
+from langsmith.address import AgentAddress
 from langsmith.client import Client
 from langsmith.run_trees import RunTree
 
@@ -863,10 +864,9 @@ class TestBaggageAgentAddressing:
         replicas_json = json.dumps(
             [
                 {
-                    # Both members, or the replica is dropped before the
+                    # Without a destination the replica is dropped before the
                     # credential check below can run.
-                    "agent_id": "replica-agent",
-                    "agent_environment": "staging",
+                    "address": "lrn:agents/replica-agent/environments/staging",
                     "api_key": "secret",
                     "api_url": "http://x",
                 }
@@ -878,3 +878,4 @@ class TestBaggageAgentAddressing:
         replica = parsed.replicas[0]
         assert "api_key" not in replica
         assert "api_url" not in replica
+        assert replica["address"] == AgentAddress("replica-agent", "staging")

@@ -475,7 +475,7 @@ def run_ws_stream(
         except ConnectionClosed as e:
             if e.rcvd and e.rcvd.code == 1001:
                 raise SandboxServerReloadError("Server is reloading, reconnect to resume") from e
-            raise SandboxConnectionError(f"WebSocket connection closed unexpectedly: {e}") from e
+            raise SandboxRetryableConnectionError(f"WebSocket connection closed unexpectedly: {e}") from e
         except (OSError, RuntimeError) as e:
             raise SandboxConnectTimeoutError(f"Failed to connect to sandbox: {e}") from e
         finally:
@@ -661,7 +661,7 @@ async def run_ws_stream_async(
         except ConnectionClosed as e:
             if e.rcvd and e.rcvd.code == 1001:
                 raise SandboxServerReloadError("Server is reloading, reconnect to resume") from e
-            raise SandboxConnectionError(f"WebSocket connection closed unexpectedly: {e}") from e
+            raise SandboxRetryableConnectionError(f"WebSocket connection closed unexpectedly: {e}") from e
         except (OSError, RuntimeError) as e:
             raise SandboxConnectTimeoutError(f"Failed to connect to sandbox: {e}") from e
         finally:

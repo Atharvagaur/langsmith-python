@@ -1,9 +1,3 @@
-# Shared Types
-
-```python
-from langsmith.types import AgentAddress
-```
-
 # ProductFeedback
 
 Types:
@@ -30,6 +24,27 @@ from langsmith.types.fleet import ThreadActivateSandboxResponse
 Methods:
 
 - <code title="post /v1/fleet/threads/{thread_id}/sandbox-activation">client.fleet.threads.<a href="./src/langsmith/resources/fleet/threads.py">activate_sandbox</a>(thread_id) -> <a href="./src/langsmith/types/fleet/thread_activate_sandbox_response.py">ThreadActivateSandboxResponse</a></code>
+
+# Sessions
+
+Types:
+
+```python
+from langsmith.types import (
+    CustomChartsSection,
+    CustomChartsSectionRequest,
+    RunStatsGroupBy,
+    SessionSortableColumns,
+    TimedeltaInput,
+    TracerSession,
+    TracerSessionWithoutVirtualFields,
+    SessionResolveResponse,
+)
+```
+
+Methods:
+
+- <code title="get /api/v1/sessions/resolutions">client.sessions.<a href="./src/langsmith/resources/sessions.py">resolve</a>(\*\*<a href="src/langsmith/types/session_resolve_params.py">params</a>) -> <a href="./src/langsmith/types/session_resolve_response.py">SessionResolveResponse</a></code>
 
 # Datasets
 
