@@ -44,7 +44,7 @@ jobs:
           mkdir -p out
           {
             echo 'OUTPUT<<EOF'
-            uv run python -m bench -o out/benchmark.json --fast
+            PYTHONPATH=. uv run python -m bench -o out/benchmark.json --fast
             echo EOF
           } >> "$GITHUB_OUTPUT"
 
