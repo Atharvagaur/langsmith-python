@@ -31,7 +31,7 @@ jobs:
       - name: Run benchmarks
         run: |
           mkdir -p out
-          uv run python -m bench -o out/benchmark-baseline.json --rigorous
+          PYTHONPATH=. uv run python -m bench -o out/benchmark-baseline.json --rigorous
 
       - name: Save baseline
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
