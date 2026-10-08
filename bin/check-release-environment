@@ -1,25 +1,11 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-errors=()
-
-if [ -z "${RELEASE_PLEASE_TOKEN}" ]; then
-  errors+=("The RELEASE_PLEASE_TOKEN secret has not been set. Create a fine-grained GitHub PAT and add it as a repository secret.")
-fi
-
-if [ -z "${PYPI_TOKEN}" ]; then
-  errors+=("The PYPI_TOKEN secret has not been set. Please set it in either this repository's secrets or your organization secrets.")
-fi
-
-lenErrors=${#errors[@]}
-
-if [[ lenErrors -gt 0 ]]; then
-  echo -e "Found the following errors in the release environment:\n"
-
-  for error in "${errors[@]}"; do
-    echo -e "- $error\n"
-  done
-
-  exit 1
-fi
-
-echo "The environment is ready to push releases!"
+: "${GH_TOKEN:?GitHub workflow token is required}"
+: "${GH_REPO:?GitHub repository is required}"
+: "${ACTIONS_ID_TOKEN_REQUEST_URL:?Workflow needs id-token: write}"
+: "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?Workflow needs id-token: write}"
+gh api "repos/$GH_REPO" --silent
+curl --fail --silent --show-error https://pypi.org/pypi/langsmith/json >/dev/null
+echo "GitHub authentication, OIDC availability and registry reachability checked."
+echo "Trusted-publisher registration and registry write permission still require separate verification."
