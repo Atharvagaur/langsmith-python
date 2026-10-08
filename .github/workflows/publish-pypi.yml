@@ -3,15 +3,18 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: publish-pypi
   cancel-in-progress: false
 
 jobs:
-  publish:
+  # Build runs third-party code (build backend, Socket action) and holds no
+  # write permission at all. The two jobs after it only download the artifact:
+  # attach gets contents: write for the release upload, publish gets the OIDC
+  # token for PyPI. Neither runs anything but GitHub's CLI or the pypa action.
+  build:
     if: github.repository == 'langchain-ai/langsmith-python' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
@@ -61,6 +64,25 @@ jobs:
       - name: Build distributions
         run: uv build
 
+      - name: Hand the distributions to the publish job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  attach:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
       - name: Attach distributions to the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -75,6 +97,17 @@ jobs:
             fi
             gh release upload "$RELEASE_TAG" "$ASSET"
           done
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
 
       - name: Publish through PyPI trusted publishing
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
