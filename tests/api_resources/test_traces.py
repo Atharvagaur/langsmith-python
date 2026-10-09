@@ -90,6 +90,7 @@ class TestTraces:
     @parametrize
     def test_method_query_with_all_params(self, client: Langsmith) -> None:
         trace = client.traces.query(
+            ai_search="A run that contains a billing dispute",
             cursor="cursor",
             max_start_time=parse_datetime("2024-12-31T23:59:59Z"),
             min_start_time=parse_datetime("2024-01-01T00:00:00Z"),
@@ -99,6 +100,7 @@ class TestTraces:
             trace_filter='eq(status, "error")',
             trace_ids=["182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e"],
             tree_filter='has(tags, "production")',
+            accept="Accept",
         )
         assert_matches_type(SyncItemsCursorPostPagination[Trace], trace, path=["response"])
 
@@ -202,6 +204,7 @@ class TestAsyncTraces:
     @parametrize
     async def test_method_query_with_all_params(self, async_client: AsyncLangsmith) -> None:
         trace = await async_client.traces.query(
+            ai_search="A run that contains a billing dispute",
             cursor="cursor",
             max_start_time=parse_datetime("2024-12-31T23:59:59Z"),
             min_start_time=parse_datetime("2024-01-01T00:00:00Z"),
@@ -211,6 +214,7 @@ class TestAsyncTraces:
             trace_filter='eq(status, "error")',
             trace_ids=["182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e"],
             tree_filter='has(tags, "production")',
+            accept="Accept",
         )
         assert_matches_type(AsyncItemsCursorPostPagination[Trace], trace, path=["response"])
 

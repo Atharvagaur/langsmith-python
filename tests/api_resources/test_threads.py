@@ -154,6 +154,7 @@ class TestThreads:
     @parametrize
     def test_method_query_with_all_params(self, client: Langsmith) -> None:
         thread = client.threads.query(
+            ai_search="A conversation about a refund request",
             cursor="cursor",
             filter="filter",
             max_start_time=parse_datetime("2019-12-27T18:11:19.117Z"),
@@ -383,6 +384,7 @@ class TestAsyncThreads:
     @parametrize
     async def test_method_query_with_all_params(self, async_client: AsyncLangsmith) -> None:
         thread = await async_client.threads.query(
+            ai_search="A conversation about a refund request",
             cursor="cursor",
             filter="filter",
             max_start_time=parse_datetime("2019-12-27T18:11:19.117Z"),

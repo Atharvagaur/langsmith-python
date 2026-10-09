@@ -94,6 +94,7 @@ class TestRuns:
     @parametrize
     def test_method_query_v2_with_all_params(self, client: Langsmith) -> None:
         run = client.runs.query_v2(
+            ai_search="The customer was charged twice",
             cursor="eyJ2IjoxLCJhIjoicnVucy5xdWVyeSIsImsiOiJwYXNzIiwiYiI6InNkYiIsInQiOiJsdChjdXJzb3IsICcyMDI1LTEyLTEyIDE5OjAzOjI4LjQ4MTI1NTAxOWIxM2YyJykifQ",
             filter='and(eq(run_type, "llm"), gt(latency, 5))',
             has_error=False,
@@ -274,6 +275,7 @@ class TestAsyncRuns:
     @parametrize
     async def test_method_query_v2_with_all_params(self, async_client: AsyncLangsmith) -> None:
         run = await async_client.runs.query_v2(
+            ai_search="The customer was charged twice",
             cursor="eyJ2IjoxLCJhIjoicnVucy5xdWVyeSIsImsiOiJwYXNzIiwiYiI6InNkYiIsInQiOiJsdChjdXJzb3IsICcyMDI1LTEyLTEyIDE5OjAzOjI4LjQ4MTI1NTAxOWIxM2YyJykifQ",
             filter='and(eq(run_type, "llm"), gt(latency, 5))',
             has_error=False,
