@@ -97,6 +97,7 @@ class TestAnnotationQueues:
                 {
                     "feedback_key": "feedback_key",
                     "description": "description",
+                    "feedback_config_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
                     "is_assertion": True,
                     "is_required": True,
                     "regex_validator": "string",
@@ -212,6 +213,7 @@ class TestAnnotationQueues:
                 {
                     "feedback_key": "feedback_key",
                     "description": "description",
+                    "feedback_config_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
                     "is_assertion": True,
                     "is_required": True,
                     "regex_validator": "string",
@@ -827,6 +829,7 @@ class TestAsyncAnnotationQueues:
                 {
                     "feedback_key": "feedback_key",
                     "description": "description",
+                    "feedback_config_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
                     "is_assertion": True,
                     "is_required": True,
                     "regex_validator": "string",
@@ -942,6 +945,7 @@ class TestAsyncAnnotationQueues:
                 {
                     "feedback_key": "feedback_key",
                     "description": "description",
+                    "feedback_config_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
                     "is_assertion": True,
                     "is_required": True,
                     "regex_validator": "string",
