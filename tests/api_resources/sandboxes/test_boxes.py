@@ -79,6 +79,7 @@ class TestBoxes:
                             "repo": "repo",
                             "initial_pull_only": True,
                         },
+                        "encryption": {"kms_key": "kms_key"},
                         "gcs": {
                             "bucket": "bucket",
                             "prefix": "prefix",
@@ -914,6 +915,7 @@ class TestAsyncBoxes:
                             "repo": "repo",
                             "initial_pull_only": True,
                         },
+                        "encryption": {"kms_key": "kms_key"},
                         "gcs": {
                             "bucket": "bucket",
                             "prefix": "prefix",
