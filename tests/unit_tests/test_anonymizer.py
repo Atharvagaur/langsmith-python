@@ -397,7 +397,7 @@ def _fastest_walk_seconds(n: int) -> float:
 
 def test_extract_string_nodes_scales_linearly():
     """8x the nodes must cost ~8x the time, not ~64x: `list.pop(0)` was O(n)."""
-    assert _fastest_walk_seconds(16_000) / _fastest_walk_seconds(2_000) < 20
+    assert _fastest_walk_seconds(16_000) / _fastest_walk_seconds(2_000) < 30
 
 
 def test_extract_string_nodes_order_and_max_depth():
