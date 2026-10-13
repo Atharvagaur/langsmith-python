@@ -50,13 +50,19 @@ class TestBoxes:
             mem_bytes=0,
             mount_config={
                 "auth": {
-                    "aws": {"role_arn": "x"},
+                    "aws": {
+                        "role_arn": "x",
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                    },
                     "gcp": {
+                        "service_account_email": "service_account_email",
                         "service_account_json": {
                             "type": "plaintext",
                             "is_set": True,
                             "value": "value",
-                        }
+                        },
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        "workload_identity_provider": "workload_identity_provider",
                     },
                 },
                 "mounts": [
@@ -124,17 +130,23 @@ class TestBoxes:
                 "rules": [
                     {
                         "name": "name",
-                        "aws": {"role_arn": "x"},
+                        "aws": {
+                            "role_arn": "x",
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
                         "description": "description",
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
                             "scopes": ["string"],
+                            "service_account_email": "service_account_email",
                             "service_account_json": {
                                 "type": "plaintext",
                                 "is_set": True,
                                 "value": "value",
                             },
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -276,17 +288,23 @@ class TestBoxes:
                 "rules": [
                     {
                         "name": "name",
-                        "aws": {"role_arn": "x"},
+                        "aws": {
+                            "role_arn": "x",
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
                         "description": "description",
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
                             "scopes": ["string"],
+                            "service_account_email": "service_account_email",
                             "service_account_json": {
                                 "type": "plaintext",
                                 "is_set": True,
                                 "value": "value",
                             },
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -886,13 +904,19 @@ class TestAsyncBoxes:
             mem_bytes=0,
             mount_config={
                 "auth": {
-                    "aws": {"role_arn": "x"},
+                    "aws": {
+                        "role_arn": "x",
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                    },
                     "gcp": {
+                        "service_account_email": "service_account_email",
                         "service_account_json": {
                             "type": "plaintext",
                             "is_set": True,
                             "value": "value",
-                        }
+                        },
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        "workload_identity_provider": "workload_identity_provider",
                     },
                 },
                 "mounts": [
@@ -960,17 +984,23 @@ class TestAsyncBoxes:
                 "rules": [
                     {
                         "name": "name",
-                        "aws": {"role_arn": "x"},
+                        "aws": {
+                            "role_arn": "x",
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
                         "description": "description",
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
                             "scopes": ["string"],
+                            "service_account_email": "service_account_email",
                             "service_account_json": {
                                 "type": "plaintext",
                                 "is_set": True,
                                 "value": "value",
                             },
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -1112,17 +1142,23 @@ class TestAsyncBoxes:
                 "rules": [
                     {
                         "name": "name",
-                        "aws": {"role_arn": "x"},
+                        "aws": {
+                            "role_arn": "x",
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
                         "description": "description",
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
                             "scopes": ["string"],
+                            "service_account_email": "service_account_email",
                             "service_account_json": {
                                 "type": "plaintext",
                                 "is_set": True,
                                 "value": "value",
                             },
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
