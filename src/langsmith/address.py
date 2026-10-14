@@ -10,21 +10,21 @@ environment, an `ExperimentAddress`, or the workspace's `EvaluatorAddress` trace
 Query APIs resolve an address to its project (`client.sessions.resolve`). Only an
 `AgentAddress` can receive traces, so tracing entry points take an `AgentAddress`,
 and anything else is rejected.
-The environment of an agent is one of `local`, `development`, `staging` or
-`production`, and is always lowercase.
+The environment of an agent is one of `LOCAL`, `DEVELOPMENT`, `STAGING` or
+`PRODUCTION`. Factories accept any case; only LRN identifiers use lowercase.
 
 Example:
     ```python
     import langsmith as ls
 
-    support = ls.AgentAddress(id="customer-support", environment="production")
+    support = ls.agent_address(id="customer-support", environment="production")
 
 
     @ls.traceable(address=support)
     def handle(order): ...
 
 
-    with ls.tracing_context(address=ls.AgentAddress("customer-support", "staging")):
+    with ls.tracing_context(address=ls.agent_address("customer-support", "staging")):
         handle(order)
     ```
 """
@@ -32,9 +32,8 @@ Example:
 from __future__ import annotations
 
 import re
-import dataclasses
-from typing import Any, Optional, Protocol, cast, runtime_checkable
-from typing_extensions import Literal, Required, TypedDict
+from typing import Any, Optional, cast
+from typing_extensions import Literal, TypedDict
 
 from langsmith import utils
 
@@ -45,33 +44,45 @@ __all__ = [
     "EvaluatorAddress",
     "EnvAddressError",
     "ExperimentAddress",
+    "agent_address",
+    "experiment_address",
+    "evaluator_address",
 ]
 
-# The server's agent id rule: a DNS label, so a hostname can carry the id.
 _AGENT_ID_PATTERN = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _ENVIRONMENTS = ("local", "development", "staging", "production")
-# The canonical, hyphenated UUID. Other spellings of one are not accepted, so the
-# Python and JS SDKs take the same experiment ids.
 _UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
-# The wire form of an agent address. The parts are validated by `AgentAddress`.
 _LRN_PATTERN = re.compile(r"lrn:agents/([^/]+)/environments/([^/]+)")
 
 
-class ApiAddress(TypedDict, total=False):
-    """(beta) An address as `client.sessions.resolve` takes it."""
+class AgentAddress(TypedDict):
+    """(beta) An agent address. Use `agent_address` to validate and construct one.
 
-    kind: Required[Literal["AGENT", "EXPERIMENT", "EVALUATOR"]]
+    The id is a DNS label of 1 to 63 lowercase ASCII letters, digits or hyphens,
+    starting with a letter and ending with a letter or digit. The environment is
+    local, development, staging or production.
+    """
+
+    kind: Literal["AGENT"]
     id: str
     environment: Literal["LOCAL", "DEVELOPMENT", "STAGING", "PRODUCTION"]
 
 
-@runtime_checkable
-class Address(Protocol):
-    """(beta) Names the tracing project of a feature, such as an agent."""
+class ExperimentAddress(TypedDict):
+    """(beta) An experiment address. Use `experiment_address` to construct one."""
 
-    def to_api_address(self) -> ApiAddress:
-        """Return the address as the query APIs take it."""
-        ...
+    kind: Literal["EXPERIMENT"]
+    id: str
+
+
+class EvaluatorAddress(TypedDict):
+    """(beta) The address of the workspace's shared evaluators project."""
+
+    kind: Literal["EVALUATOR"]
+
+
+Address = AgentAddress | ExperimentAddress | EvaluatorAddress
+ApiAddress = Address
 
 
 class EnvAddressError(utils.LangSmithUserError):
@@ -86,150 +97,96 @@ class EnvAddressError(utils.LangSmithUserError):
     """
 
 
-@dataclasses.dataclass(frozen=True)
-class AgentAddress:
-    """(beta) The address of an agent's environment.
+def agent_address(id: str, environment: str) -> AgentAddress:
+    """(beta) Construct an agent address with its kind and environment.
 
     Args:
-        id: The agent's ID: 1 to 63 lowercase ASCII letters, digits or
-            hyphens, starting with a letter and ending with a letter or digit.
-            The server creates the agent on first use.
-        environment: One of `local`, `development`, `staging` or `production`, in any
-            case.
+        id: A DNS label of 1 to 63 lowercase ASCII letters, digits or hyphens,
+            starting with a letter and ending with a letter or digit.
+        environment: Local, development, staging or production.
 
     Raises:
-        LangSmithUserError: If a value is invalid.
+        LangSmithUserError: If the id or environment is invalid.
     """
-
-    id: str
-    environment: str
-
-    def __post_init__(self) -> None:
-        """Validate the fields and lowercase the environment."""
-        if not isinstance(self.id, str) or not _AGENT_ID_PATTERN.fullmatch(self.id):  # pyright: ignore[reportUnnecessaryIsInstance]
-            raise utils.LangSmithUserError(
-                "Address agent id must be 1 to 63 lowercase ASCII letters, digits, "
-                "or hyphens, start with a letter, and end with a letter or digit, "
-                f"got {self.id!r}. Use an id such as 'support-agent'."
-            )
-        environment = self.environment.lower() if isinstance(self.environment, str) else None  # pyright: ignore[reportUnnecessaryIsInstance]
-        if environment not in _ENVIRONMENTS:
-            raise utils.LangSmithUserError(
-                f"Address environment must be one of {', '.join(_ENVIRONMENTS)}, got {self.environment!r}."
-            )
-        object.__setattr__(self, "environment", environment)
-
-    def _lrn(self) -> str:
-        """Return `lrn:agents/{id}/environments/{environment}`. Wire format only."""
-        return f"lrn:agents/{self.id}/environments/{self.environment}"
-
-    @classmethod
-    def _from_lrn(cls, value: Any) -> AgentAddress:
-        """Parse an LRN read from the wire, such as a `baggage` header.
-
-        The value is untrusted, so it is not echoed in the error.
-
-        Raises:
-            LangSmithUserError: If `value` is not an agent LRN, or names an
-                invalid id or environment.
-        """
-        match = _LRN_PATTERN.fullmatch(value) if isinstance(value, str) else None
-        if match is None:
-            raise utils.LangSmithUserError("Not an agent address.")
-        return cls(*match.groups())
-
-    def to_api_address(self) -> ApiAddress:
-        """Return this agent as the address the query APIs take."""
-        return cast(
-            "ApiAddress",
-            {"kind": "AGENT", "id": self.id, "environment": self.environment.upper()},
+    if not isinstance(id, str) or not _AGENT_ID_PATTERN.fullmatch(id):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise utils.LangSmithUserError(
+            "Address agent id must be 1 to 63 lowercase ASCII letters, digits, "
+            "or hyphens, start with a letter, and end with a letter or digit, "
+            f"got {id!r}. Use an id such as 'support-agent'."
         )
-
-    @classmethod
-    def from_env(cls) -> Optional[AgentAddress]:
-        """Read the agent named by the `LANGSMITH_AGENT_*` env vars.
-
-        Reads `LANGSMITH_AGENT_ID` and `LANGSMITH_AGENT_ENVIRONMENT`, and
-        returns `None` if neither is set.
-
-        Raises:
-            EnvAddressError: If only one is set, or a value is invalid.
-        """
-        values = env_values()
-        if not any(values.values()):
-            return None
-        missing = [name for name, value in values.items() if not value]
-        try:
-            if missing:
-                raise utils.LangSmithUserError(f"An address needs {' and '.join(missing)} as well.")
-            return cls(*values.values())  # type: ignore[arg-type]
-        except utils.LangSmithUserError as e:
-            present = ", ".join(f"{name}={value!r}" for name, value in values.items() if value)
-            raise EnvAddressError(f"The LANGSMITH_AGENT_* env vars can't address a run ({present}): {e}") from e
+    normalized = environment.lower() if isinstance(environment, str) else None  # pyright: ignore[reportUnnecessaryIsInstance]
+    if normalized not in _ENVIRONMENTS:
+        raise utils.LangSmithUserError(
+            f"Address environment must be one of {', '.join(_ENVIRONMENTS)}, got {environment!r}."
+        )
+    return {
+        "kind": "AGENT",
+        "id": id,
+        "environment": cast(Literal["LOCAL", "DEVELOPMENT", "STAGING", "PRODUCTION"], cast(str, normalized).upper()),
+    }
 
 
-@dataclasses.dataclass(frozen=True)
-class ExperimentAddress:
-    """(beta) The tracing project of an experiment, by its id.
-
-    Query APIs take it; it cannot be sent traces.
-
-    Args:
-        id: The experiment's UUID.
+def experiment_address(id: str) -> ExperimentAddress:
+    """(beta) Construct an experiment address with its kind and lowercase UUID.
 
     Raises:
-        LangSmithUserError: If `id` is not a UUID.
+        LangSmithUserError: If the id is not a canonical, hyphenated UUID.
     """
-
-    id: str
-
-    def __post_init__(self) -> None:
-        """Validate the id and lowercase it."""
-        if not isinstance(self.id, str) or not _UUID_PATTERN.fullmatch(self.id):  # pyright: ignore[reportUnnecessaryIsInstance]
-            raise utils.LangSmithUserError(
-                "An experiment id must be a UUID with hyphens, such as "
-                f"'0190c3d4-0000-7000-8000-0000000000b1', got {self.id!r}."
-            )
-        object.__setattr__(self, "id", self.id.lower())
-
-    def to_api_address(self) -> ApiAddress:
-        """Return this experiment as the address the query APIs take."""
-        return cast("ApiAddress", {"kind": "EXPERIMENT", "id": self.id})
+    if not isinstance(id, str) or not _UUID_PATTERN.fullmatch(id):  # pyright: ignore[reportUnnecessaryIsInstance]
+        raise utils.LangSmithUserError(
+            f"An experiment id must be a UUID with hyphens, such as '0190c3d4-0000-7000-8000-0000000000b1', got {id!r}."
+        )
+    return {"kind": "EXPERIMENT", "id": id.lower()}
 
 
-@dataclasses.dataclass(frozen=True)
-class EvaluatorAddress:
-    """(beta) The tracing project of the workspace's evaluators.
-
-    Evaluator traces share one project per workspace. Query APIs take it; it
-    cannot be sent traces.
-    """
-
-    def to_api_address(self) -> ApiAddress:
-        """Return the address the query APIs take."""
-        return cast("ApiAddress", {"kind": "EVALUATOR"})
+def evaluator_address() -> EvaluatorAddress:
+    """(beta) Construct the address of the workspace's shared evaluators project."""
+    return {"kind": "EVALUATOR"}
 
 
 def ensure_agent(address: Any) -> AgentAddress:
-    """Return `address` if it is an `AgentAddress`: the only address that takes traces.
-
-    The one place an address given to a tracing entry point is checked; the SDK
-    then carries it as is. A string is not an address.
-
-    Raises:
-        LangSmithUserError: If `address` is not an `AgentAddress`.
-    """
-    if isinstance(address, AgentAddress):
-        return address
-    if isinstance(address, Address) and not isinstance(address, str):
-        raise utils.LangSmithUserError(f"Only an `AgentAddress` can receive traces, got {address!r}.")
+    """Validate a plain agent address at a tracing entry point."""
+    if isinstance(address, dict):
+        address = cast(dict[str, Any], address)
+        if address.get("kind") == "AGENT":
+            return agent_address(cast(str, address.get("id")), cast(str, address.get("environment")))
+        if address.get("kind") in ("EXPERIMENT", "EVALUATOR"):
+            raise utils.LangSmithUserError(f"Only an `AgentAddress` can receive traces, got {address!r}.")
     raise utils.LangSmithUserError(
-        f"An address must be an `AgentAddress` such as `ls.AgentAddress(id, environment)`, got {address!r}."
+        f"An address must be an `AgentAddress` such as `ls.agent_address(id, environment)`, got {address!r}."
     )
 
 
+def address_to_lrn(address: AgentAddress) -> str:
+    """Convert a validated agent address to its ingestion wire identifier."""
+    return f"lrn:agents/{address['id']}/environments/{address['environment'].lower()}"
+
+
+def address_from_lrn(value: Any) -> AgentAddress:
+    """Parse an untrusted wire identifier without echoing it in errors."""
+    match = _LRN_PATTERN.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise utils.LangSmithUserError("Not an agent address.")
+    return agent_address(*match.groups())
+
+
+def address_from_env() -> Optional[AgentAddress]:
+    """Read and validate LANGSMITH_AGENT_ID and LANGSMITH_AGENT_ENVIRONMENT."""
+    values = env_values()
+    if not any(values.values()):
+        return None
+    missing = [name for name, value in values.items() if not value]
+    try:
+        if missing:
+            raise utils.LangSmithUserError(f"An address needs {' and '.join(missing)} as well.")
+        return agent_address(cast(str, values["LANGSMITH_AGENT_ID"]), cast(str, values["LANGSMITH_AGENT_ENVIRONMENT"]))
+    except utils.LangSmithUserError as e:
+        present = ", ".join(f"{name}={value!r}" for name, value in values.items() if value)
+        raise EnvAddressError(f"The LANGSMITH_AGENT_* env vars can't address a run ({present}): {e}") from e
+
+
 def env_values() -> dict[str, Optional[str]]:
-    """Return each `LANGSMITH_AGENT_*` env var an address reads, with its value."""
+    """Return each LANGSMITH_AGENT_* env var an address reads, with its value."""
     return {
         f"LANGSMITH_{name}": utils.get_env_var(name, namespaces=("LANGSMITH",))
         for name in ("AGENT_ID", "AGENT_ENVIRONMENT")

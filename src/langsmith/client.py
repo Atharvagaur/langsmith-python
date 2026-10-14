@@ -2452,7 +2452,7 @@ class Client:
             project_name (Optional[str]): The project name of the run.
             revision_id (Optional[Union[UUID, str]]): The revision ID of the run.
             address (Optional[AgentAddress]): (beta) An `AgentAddress`, such as
-                `ls.AgentAddress(id, environment)`, to send the run to instead of a project.
+                `ls.agent_address(id, environment)`, to send the run to instead of a project.
                 Cannot be combined with `project_name` / `session_id` in the
                 same call. Defaults to the `LANGSMITH_AGENT_*` env vars.
                 This is in beta and enabled per workspace; a

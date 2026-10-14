@@ -22,7 +22,7 @@ from langsmith import schemas as ls_schemas
 from langsmith import utils
 from langsmith._internal import _addressing, _v2_migration_utils
 from langsmith._internal._uuid import uuid7, uuid7_deterministic
-from langsmith.address import AgentAddress
+from langsmith.address import AgentAddress, address_to_lrn, address_from_lrn
 from langsmith.client import (
     ID_TYPE,
     RUN_TYPE_T,
@@ -280,7 +280,7 @@ def configure(
 
             Pass `None` to explicitly clear the project name.
         address: (beta) An `AgentAddress`, such as
-            `ls.AgentAddress(id, environment)`, to send traces to instead of a
+            `ls.agent_address(id, environment)`, to send traces to instead of a
             project. Mutually exclusive with `project_name`.
 
             Pass `None` to explicitly clear it.
@@ -856,7 +856,11 @@ class RunTree(ls_schemas.RunBase):
             return run_dict
         # Runs are duplicated per destination, so the derivation seed has to
         # identify the destination -- an addressed replica has no project.
-        seed = project_name if project_name is not None else (address._lrn() if address is not None else "agent//")
+        seed = (
+            project_name
+            if project_name is not None
+            else (address_to_lrn(address) if address is not None else "agent//")
+        )
 
         if updates and updates.get("reroot", False):
             distributed_parent_id = _DISTRIBUTED_PARENT_ID.get()
@@ -1426,14 +1430,14 @@ class _Baggage:
         if self.project_name:
             items.append(f"{LANGSMITH_PREFIX}project={urllib.parse.quote(self.project_name)}")
         if self.address is not None:
-            items.append(f"{LANGSMITH_ADDRESS}={urllib.parse.quote(self.address._lrn())}")
+            items.append(f"{LANGSMITH_ADDRESS}={urllib.parse.quote(address_to_lrn(self.address))}")
         return ",".join(items)
 
 
 def _address_from_header(value: Any) -> Optional[AgentAddress]:
     """Build an address from an untrusted header value, or `None` if unusable."""
     try:
-        return AgentAddress._from_lrn(value)
+        return address_from_lrn(value)
     except utils.LangSmithUserError:
         # The value is untrusted, so it is not logged.
         logger.warning("Ignoring an unusable address in a `baggage` header.")
