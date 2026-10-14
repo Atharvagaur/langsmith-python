@@ -149,15 +149,10 @@ class TestBoxes:
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
+                            "workload_identity_provider": "x",
                             "scopes": ["string"],
                             "service_account_email": "service_account_email",
-                            "service_account_json": {
-                                "type": "plaintext",
-                                "is_set": True,
-                                "value": "value",
-                            },
                             "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
-                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -313,15 +308,10 @@ class TestBoxes:
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
+                            "workload_identity_provider": "x",
                             "scopes": ["string"],
                             "service_account_email": "service_account_email",
-                            "service_account_json": {
-                                "type": "plaintext",
-                                "is_set": True,
-                                "value": "value",
-                            },
                             "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
-                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -1020,15 +1010,10 @@ class TestAsyncBoxes:
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
+                            "workload_identity_provider": "x",
                             "scopes": ["string"],
                             "service_account_email": "service_account_email",
-                            "service_account_json": {
-                                "type": "plaintext",
-                                "is_set": True,
-                                "value": "value",
-                            },
                             "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
-                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -1184,15 +1169,10 @@ class TestAsyncBoxes:
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
+                            "workload_identity_provider": "x",
                             "scopes": ["string"],
                             "service_account_email": "service_account_email",
-                            "service_account_json": {
-                                "type": "plaintext",
-                                "is_set": True,
-                                "value": "value",
-                            },
                             "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
-                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
