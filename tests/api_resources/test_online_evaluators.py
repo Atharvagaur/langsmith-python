@@ -37,6 +37,7 @@ class TestOnlineEvaluators:
             code_evaluator={
                 "advanced_features_enabled": True,
                 "code": "code",
+                "code_evaluator_input": "thread",
                 "dependencies": "dependencies",
                 "language": "language",
                 "managed_code_evaluator_key": "voice_metrics",
@@ -141,6 +142,7 @@ class TestOnlineEvaluators:
             code_evaluator={
                 "advanced_features_enabled": True,
                 "code": "code",
+                "code_evaluator_input": "thread",
                 "dependencies": "dependencies",
                 "language": "language",
                 "managed_code_evaluator_settings": {
@@ -412,6 +414,7 @@ class TestAsyncOnlineEvaluators:
             code_evaluator={
                 "advanced_features_enabled": True,
                 "code": "code",
+                "code_evaluator_input": "thread",
                 "dependencies": "dependencies",
                 "language": "language",
                 "managed_code_evaluator_key": "voice_metrics",
@@ -516,6 +519,7 @@ class TestAsyncOnlineEvaluators:
             code_evaluator={
                 "advanced_features_enabled": True,
                 "code": "code",
+                "code_evaluator_input": "thread",
                 "dependencies": "dependencies",
                 "language": "language",
                 "managed_code_evaluator_settings": {

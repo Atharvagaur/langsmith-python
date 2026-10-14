@@ -94,12 +94,15 @@ class TestRuns:
     @parametrize
     def test_method_query_v2_with_all_params(self, client: Langsmith) -> None:
         run = client.runs.query_v2(
+            ai_search="The customer was charged twice",
             cursor="eyJ2IjoxLCJhIjoicnVucy5xdWVyeSIsImsiOiJwYXNzIiwiYiI6InNkYiIsInQiOiJsdChjdXJzb3IsICcyMDI1LTEyLTEyIDE5OjAzOjI4LjQ4MTI1NTAxOWIxM2YyJykifQ",
             filter='and(eq(run_type, "llm"), gt(latency, 5))',
             has_error=False,
             ids=["018e4c7e-a9fb-7ef0-a5b6-6ea3a82e9327", "f47ac10b-58cc-4372-a567-0e02b2c3d479"],
             is_root=True,
+            max_feedback_modified_at=parse_datetime("2024-12-31T23:59:59Z"),
             max_start_time=parse_datetime("2024-12-31T23:59:59Z"),
+            min_feedback_modified_at=parse_datetime("2024-01-01T00:00:00Z"),
             min_start_time=parse_datetime("2024-01-01T00:00:00Z"),
             page_size=100,
             project_ids=["018e4c7e-a9fb-7ef0-a5b6-6ea3a82e9327", "0190a1b2-c3d4-7ef0-a5b6-6ea3a82e9328"],
@@ -274,12 +277,15 @@ class TestAsyncRuns:
     @parametrize
     async def test_method_query_v2_with_all_params(self, async_client: AsyncLangsmith) -> None:
         run = await async_client.runs.query_v2(
+            ai_search="The customer was charged twice",
             cursor="eyJ2IjoxLCJhIjoicnVucy5xdWVyeSIsImsiOiJwYXNzIiwiYiI6InNkYiIsInQiOiJsdChjdXJzb3IsICcyMDI1LTEyLTEyIDE5OjAzOjI4LjQ4MTI1NTAxOWIxM2YyJykifQ",
             filter='and(eq(run_type, "llm"), gt(latency, 5))',
             has_error=False,
             ids=["018e4c7e-a9fb-7ef0-a5b6-6ea3a82e9327", "f47ac10b-58cc-4372-a567-0e02b2c3d479"],
             is_root=True,
+            max_feedback_modified_at=parse_datetime("2024-12-31T23:59:59Z"),
             max_start_time=parse_datetime("2024-12-31T23:59:59Z"),
+            min_feedback_modified_at=parse_datetime("2024-01-01T00:00:00Z"),
             min_start_time=parse_datetime("2024-01-01T00:00:00Z"),
             page_size=100,
             project_ids=["018e4c7e-a9fb-7ef0-a5b6-6ea3a82e9327", "0190a1b2-c3d4-7ef0-a5b6-6ea3a82e9328"],

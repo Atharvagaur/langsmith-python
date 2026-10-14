@@ -97,6 +97,25 @@ class TestAnnotationQueues:
                 {
                     "feedback_key": "feedback_key",
                     "description": "description",
+                    "feedback_config": {
+                        "id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
+                        "feedback_config": {
+                            "type": "continuous",
+                            "categories": [
+                                {
+                                    "value": 0,
+                                    "label": "x",
+                                }
+                            ],
+                            "max": 0,
+                            "min": 0,
+                        },
+                        "feedback_key": "feedback_key",
+                        "modified_at": parse_datetime("2019-12-27T18:11:19.117Z"),
+                        "tenant_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
+                        "is_lower_score_better": True,
+                    },
+                    "feedback_config_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
                     "is_assertion": True,
                     "is_required": True,
                     "regex_validator": "string",
@@ -212,6 +231,25 @@ class TestAnnotationQueues:
                 {
                     "feedback_key": "feedback_key",
                     "description": "description",
+                    "feedback_config": {
+                        "id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
+                        "feedback_config": {
+                            "type": "continuous",
+                            "categories": [
+                                {
+                                    "value": 0,
+                                    "label": "x",
+                                }
+                            ],
+                            "max": 0,
+                            "min": 0,
+                        },
+                        "feedback_key": "feedback_key",
+                        "modified_at": parse_datetime("2019-12-27T18:11:19.117Z"),
+                        "tenant_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
+                        "is_lower_score_better": True,
+                    },
+                    "feedback_config_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
                     "is_assertion": True,
                     "is_required": True,
                     "regex_validator": "string",
@@ -827,6 +865,25 @@ class TestAsyncAnnotationQueues:
                 {
                     "feedback_key": "feedback_key",
                     "description": "description",
+                    "feedback_config": {
+                        "id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
+                        "feedback_config": {
+                            "type": "continuous",
+                            "categories": [
+                                {
+                                    "value": 0,
+                                    "label": "x",
+                                }
+                            ],
+                            "max": 0,
+                            "min": 0,
+                        },
+                        "feedback_key": "feedback_key",
+                        "modified_at": parse_datetime("2019-12-27T18:11:19.117Z"),
+                        "tenant_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
+                        "is_lower_score_better": True,
+                    },
+                    "feedback_config_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
                     "is_assertion": True,
                     "is_required": True,
                     "regex_validator": "string",
@@ -942,6 +999,25 @@ class TestAsyncAnnotationQueues:
                 {
                     "feedback_key": "feedback_key",
                     "description": "description",
+                    "feedback_config": {
+                        "id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
+                        "feedback_config": {
+                            "type": "continuous",
+                            "categories": [
+                                {
+                                    "value": 0,
+                                    "label": "x",
+                                }
+                            ],
+                            "max": 0,
+                            "min": 0,
+                        },
+                        "feedback_key": "feedback_key",
+                        "modified_at": parse_datetime("2019-12-27T18:11:19.117Z"),
+                        "tenant_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
+                        "is_lower_score_better": True,
+                    },
+                    "feedback_config_id": "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e",
                     "is_assertion": True,
                     "is_required": True,
                     "regex_validator": "string",

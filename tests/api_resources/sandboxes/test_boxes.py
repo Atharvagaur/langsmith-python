@@ -50,13 +50,19 @@ class TestBoxes:
             mem_bytes=0,
             mount_config={
                 "auth": {
-                    "aws": {"role_arn": "x"},
+                    "aws": {
+                        "role_arn": "x",
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                    },
+                    "azure": {
+                        "client_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                        "tenant_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                    },
                     "gcp": {
-                        "service_account_json": {
-                            "type": "plaintext",
-                            "is_set": True,
-                            "value": "value",
-                        }
+                        "workload_identity_provider": "x",
+                        "service_account_email": "service_account_email",
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
                     },
                 },
                 "mounts": [
@@ -71,6 +77,11 @@ class TestBoxes:
                             "prefix": "prefix",
                         },
                         "type": "s3",
+                        "azure_blob": {
+                            "container": "container",
+                            "storage_account": "26f1klzn5713",
+                            "prefix": "prefix",
+                        },
                         "cache": {
                             "max_size_bytes": 0,
                             "writeback_seconds": 0,
@@ -79,6 +90,7 @@ class TestBoxes:
                             "repo": "repo",
                             "initial_pull_only": True,
                         },
+                        "encryption": {"kms_key": "kms_key"},
                         "gcs": {
                             "bucket": "bucket",
                             "prefix": "prefix",
@@ -123,17 +135,29 @@ class TestBoxes:
                 "rules": [
                     {
                         "name": "name",
-                        "aws": {"role_arn": "x"},
+                        "aws": {
+                            "role_arn": "x",
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
+                        "azure": {
+                            "client_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                            "tenant_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                            "resources": ["https://storage.azure.com"],
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
                         "description": "description",
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
                             "scopes": ["string"],
+                            "service_account_email": "service_account_email",
                             "service_account_json": {
                                 "type": "plaintext",
                                 "is_set": True,
                                 "value": "value",
                             },
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -275,17 +299,29 @@ class TestBoxes:
                 "rules": [
                     {
                         "name": "name",
-                        "aws": {"role_arn": "x"},
+                        "aws": {
+                            "role_arn": "x",
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
+                        "azure": {
+                            "client_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                            "tenant_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                            "resources": ["https://storage.azure.com"],
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
                         "description": "description",
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
                             "scopes": ["string"],
+                            "service_account_email": "service_account_email",
                             "service_account_json": {
                                 "type": "plaintext",
                                 "is_set": True,
                                 "value": "value",
                             },
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -885,13 +921,19 @@ class TestAsyncBoxes:
             mem_bytes=0,
             mount_config={
                 "auth": {
-                    "aws": {"role_arn": "x"},
+                    "aws": {
+                        "role_arn": "x",
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                    },
+                    "azure": {
+                        "client_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                        "tenant_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                    },
                     "gcp": {
-                        "service_account_json": {
-                            "type": "plaintext",
-                            "is_set": True,
-                            "value": "value",
-                        }
+                        "workload_identity_provider": "x",
+                        "service_account_email": "service_account_email",
+                        "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
                     },
                 },
                 "mounts": [
@@ -906,6 +948,11 @@ class TestAsyncBoxes:
                             "prefix": "prefix",
                         },
                         "type": "s3",
+                        "azure_blob": {
+                            "container": "container",
+                            "storage_account": "26f1klzn5713",
+                            "prefix": "prefix",
+                        },
                         "cache": {
                             "max_size_bytes": 0,
                             "writeback_seconds": 0,
@@ -914,6 +961,7 @@ class TestAsyncBoxes:
                             "repo": "repo",
                             "initial_pull_only": True,
                         },
+                        "encryption": {"kms_key": "kms_key"},
                         "gcs": {
                             "bucket": "bucket",
                             "prefix": "prefix",
@@ -958,17 +1006,29 @@ class TestAsyncBoxes:
                 "rules": [
                     {
                         "name": "name",
-                        "aws": {"role_arn": "x"},
+                        "aws": {
+                            "role_arn": "x",
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
+                        "azure": {
+                            "client_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                            "tenant_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                            "resources": ["https://storage.azure.com"],
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
                         "description": "description",
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
                             "scopes": ["string"],
+                            "service_account_email": "service_account_email",
                             "service_account_json": {
                                 "type": "plaintext",
                                 "is_set": True,
                                 "value": "value",
                             },
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {
@@ -1110,17 +1170,29 @@ class TestAsyncBoxes:
                 "rules": [
                     {
                         "name": "name",
-                        "aws": {"role_arn": "x"},
+                        "aws": {
+                            "role_arn": "x",
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
+                        "azure": {
+                            "client_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                            "tenant_id": "E1CB97d8-Ddf3-aAae-0Afa-1A3C33cFaADc",
+                            "resources": ["https://storage.azure.com"],
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                        },
                         "description": "description",
                         "enabled": True,
                         "env_vars": {"foo": "string"},
                         "gcp": {
                             "scopes": ["string"],
+                            "service_account_email": "service_account_email",
                             "service_account_json": {
                                 "type": "plaintext",
                                 "is_set": True,
                                 "value": "value",
                             },
+                            "subject_scope": "tag:2fdcD1Dc-bbDb-2BBD-0Afa-1A3C33cFaADc",
+                            "workload_identity_provider": "workload_identity_provider",
                         },
                         "headers": [
                             {

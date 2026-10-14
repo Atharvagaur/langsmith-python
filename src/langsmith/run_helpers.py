@@ -191,7 +191,7 @@ def tracing_context(
 
     Args:
         project_name: The name of the project to log the run to.
-        address: (beta) An `AgentAddress`, such as `ls.AgentAddress(id, environment)`, to log the
+        address: (beta) An `AgentAddress`, such as `ls.agent_address(id, environment)`, to log the
             run to instead of a project. Cannot be combined with a project in
             the same call. Defaults to the `LANGSMITH_AGENT_*` env vars.
         tags: The tags to add to the run.
@@ -444,7 +444,7 @@ def traceable(
         project_name: The name of the project to log the run to.
 
             Defaults to `None`, which will use the default project.
-        address: (beta) An `AgentAddress`, such as `ls.AgentAddress(id, environment)`, to log the
+        address: (beta) An `AgentAddress`, such as `ls.agent_address(id, environment)`, to log the
             run to instead of a project. Cannot be combined with a project in
             the same call. Defaults to the `LANGSMITH_AGENT_*` env vars.
         process_inputs: Custom serialization / processing function for inputs.
@@ -990,7 +990,7 @@ class trace:
         run_type: Type of run (e.g., `'chain'`, `'llm'`, `'tool'`).
         inputs: Initial input data for the run.
         project_name: Project name to associate the run with.
-        address: (beta) An `AgentAddress`, such as `ls.AgentAddress(id, environment)`, to log the
+        address: (beta) An `AgentAddress`, such as `ls.agent_address(id, environment)`, to log the
             run to instead of a project. Cannot be combined with a project in
             the same call. Defaults to the `LANGSMITH_AGENT_*` env vars.
         parent: Parent run.
