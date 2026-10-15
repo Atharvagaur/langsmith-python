@@ -1,4 +1,4 @@
 # File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 
 __title__ = "langsmith"
-__version__ = "0.12.6"  # x-release-please-version
+__version__ = "0.14.9-rc.1"  # x-release-please-version
