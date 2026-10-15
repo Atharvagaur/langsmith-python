@@ -702,7 +702,7 @@ class FeedbackCreate(FeedbackBase):
         """Dump the feedback, including its address."""
         dumped = super().model_dump(**kwargs)
         if self.address is not None:
-            from langsmith.address import address_to_lrn
+            from langsmith._internal._addressing import address_to_lrn
 
             dumped["address"] = address_to_lrn(self.address)
         return dumped

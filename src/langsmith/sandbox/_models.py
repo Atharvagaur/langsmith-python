@@ -14,6 +14,7 @@ from langsmith.sandbox._exceptions import (
     SandboxOperationError,
     SandboxServerReloadError,
 )
+from langsmith.sandbox._tracing import add_sandbox_metadata
 
 if TYPE_CHECKING:
     from langsmith.sandbox._async_sandbox import AsyncSandbox
@@ -487,6 +488,7 @@ class ServiceURL:
         self._token = token
         self._expires_at = expires_at
         self._refresher = _refresher
+        self._sandbox_id: Optional[str] = None
 
     # -- Auto-refresh logic -------------------------------------------------
 
@@ -547,6 +549,7 @@ class ServiceURL:
         Returns:
             httpx.Response.
         """
+        add_sandbox_metadata(self._sandbox_id)
         url = self.service_url.rstrip("/") + "/" + path.lstrip("/")
         headers = dict(kwargs.pop("headers", None) or {})
         headers[_AUTH_HEADER] = self.token
@@ -622,6 +625,7 @@ class AsyncServiceURL:
         self._token = token
         self._expires_at = expires_at
         self._refresher = _refresher
+        self._sandbox_id: Optional[str] = None
 
     # -- Auto-refresh logic -------------------------------------------------
 
@@ -700,6 +704,7 @@ class AsyncServiceURL:
         Returns:
             httpx.Response.
         """
+        add_sandbox_metadata(self._sandbox_id)
         url = (await self.get_service_url()).rstrip("/") + "/" + path.lstrip("/")
         headers = dict(kwargs.pop("headers", None) or {})
         headers[_AUTH_HEADER] = await self.get_token()
@@ -1008,6 +1013,7 @@ class CommandHandle:
         - Other SandboxConnectionError:  exponential backoff (0.5s, 1s, 2s...)
         - After kill():                  no reconnect, error propagates
         """
+        add_sandbox_metadata(self._sandbox.id)
         import time
 
         self._reconnect_attempts = 0
@@ -1023,6 +1029,8 @@ class CommandHandle:
                         self._last_stderr_offset = chunk.offset + len(chunk.data.encode("utf-8"))
                         if self._on_stderr is not None:
                             self._on_stderr(chunk.data)
+                    # Each resumption runs in the consumer's current context.
+                    add_sandbox_metadata(self._sandbox.id)
                     yield chunk
                 return  # Stream ended normally (exit message received)
 
@@ -1063,6 +1071,7 @@ class CommandHandle:
         Has no effect if the command has already exited or the
         WebSocket connection is closed.
         """
+        add_sandbox_metadata(self._sandbox.id)
         if self._control:
             self._control.send_kill()
 
@@ -1080,6 +1089,7 @@ class CommandHandle:
         Has no effect if the command has already exited or the
         WebSocket connection is closed.
         """
+        add_sandbox_metadata(self._sandbox.id)
         if self._stdin_closed:
             raise SandboxOperationError(_STDIN_CLOSED_MESSAGE)
         if self._control:
@@ -1092,6 +1102,7 @@ class CommandHandle:
         one terminal file descriptor and there is no write end to close --
         send an EOT byte (``0x04``) with :meth:`send_input` instead.
         """
+        add_sandbox_metadata(self._sandbox.id)
         if self._pty or self._stdin_closed:
             return
         self._stdin_closed = True
@@ -1290,6 +1301,7 @@ class AsyncCommandHandle:
 
     async def __aiter__(self) -> AsyncIterator[OutputChunk]:
         """Async iterate with auto-reconnect on transient errors."""
+        add_sandbox_metadata(self._sandbox.id)
         import asyncio
 
         self._reconnect_attempts = 0
@@ -1305,6 +1317,8 @@ class AsyncCommandHandle:
                         self._last_stderr_offset = chunk.offset + len(chunk.data.encode("utf-8"))
                         if self._on_stderr is not None:
                             self._on_stderr(chunk.data)
+                    # Each resumption runs in the consumer's current context.
+                    add_sandbox_metadata(self._sandbox.id)
                     yield chunk
                 return  # Stream ended normally
 
@@ -1338,6 +1352,7 @@ class AsyncCommandHandle:
 
     async def kill(self) -> None:
         """Send a kill signal to the running command."""
+        add_sandbox_metadata(self._sandbox.id)
         if self._control:
             await self._control.send_kill()
 
@@ -1349,6 +1364,7 @@ class AsyncCommandHandle:
                 ``close_input()`` or by the ``close_input=True`` default on
                 a non-PTY ``run()``.
         """
+        add_sandbox_metadata(self._sandbox.id)
         if self._stdin_closed:
             raise SandboxOperationError(_STDIN_CLOSED_MESSAGE)
         if self._control:
@@ -1361,6 +1377,7 @@ class AsyncCommandHandle:
         one terminal file descriptor and there is no write end to close --
         send an EOT byte (``0x04``) with :meth:`send_input` instead.
         """
+        add_sandbox_metadata(self._sandbox.id)
         if self._pty or self._stdin_closed:
             return
         self._stdin_closed = True

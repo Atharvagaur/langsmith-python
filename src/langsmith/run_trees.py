@@ -22,7 +22,7 @@ from langsmith import schemas as ls_schemas
 from langsmith import utils
 from langsmith._internal import _addressing, _v2_migration_utils
 from langsmith._internal._uuid import uuid7, uuid7_deterministic
-from langsmith.address import AgentAddress, address_to_lrn, address_from_lrn
+from langsmith.address import AgentAddress
 from langsmith.client import (
     ID_TYPE,
     RUN_TYPE_T,
@@ -859,7 +859,7 @@ class RunTree(ls_schemas.RunBase):
         seed = (
             project_name
             if project_name is not None
-            else (address_to_lrn(address) if address is not None else "agent//")
+            else (_addressing.address_to_lrn(address) if address is not None else "agent//")
         )
 
         if updates and updates.get("reroot", False):
@@ -1080,6 +1080,7 @@ class RunTree(ls_schemas.RunBase):
                 outputs=self.outputs.copy() if self.outputs else None,
                 error=self.error,
                 parent_run_id=self.parent_run_id,
+                session_id=self.session_id,
                 session_name=self.session_name,
                 address=self.address,
                 reference_example_id=self.reference_example_id,
@@ -1109,16 +1110,18 @@ class RunTree(ls_schemas.RunBase):
     def _resolve_url(self) -> str:
         """Ask the backend for the run's URL, falling back to building it locally."""
         client = self.client
-        _addressing.reject_url(self.session_id, self.address)
         try:
             backend = _v2_migration_utils.get_query_backend(client.info.instance_flags)
             if backend == _v2_migration_utils.QueryBackend.CLICKHOUSE_ONLY:
                 # The v2 endpoint doesn't exist on ClickHouse-only backends, which
                 # may predate it; build the URL locally there instead.
                 return client._construct_run_url(run=self)
-            session_id = self.session_id or (
-                client.read_project(project_name=self.session_name or utils.get_tracer_project()).id
-            )
+            if self.session_id:
+                session_id = self.session_id
+            elif self.address is not None:
+                session_id = client._resolve_address(self.address)
+            else:
+                session_id = client.read_project(project_name=self.session_name or utils.get_tracer_project()).id
             response = client._get_langsmith_api_sync().runs.get_url(
                 str(self.id),
                 project_id=str(session_id),
@@ -1430,14 +1433,14 @@ class _Baggage:
         if self.project_name:
             items.append(f"{LANGSMITH_PREFIX}project={urllib.parse.quote(self.project_name)}")
         if self.address is not None:
-            items.append(f"{LANGSMITH_ADDRESS}={urllib.parse.quote(address_to_lrn(self.address))}")
+            items.append(f"{LANGSMITH_ADDRESS}={urllib.parse.quote(_addressing.address_to_lrn(self.address))}")
         return ",".join(items)
 
 
 def _address_from_header(value: Any) -> Optional[AgentAddress]:
     """Build an address from an untrusted header value, or `None` if unusable."""
     try:
-        return address_from_lrn(value)
+        return _addressing.address_from_lrn(value)
     except utils.LangSmithUserError:
         # The value is untrusted, so it is not logged.
         logger.warning("Ignoring an unusable address in a `baggage` header.")
