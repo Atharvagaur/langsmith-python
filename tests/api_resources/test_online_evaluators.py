@@ -357,6 +357,7 @@ class TestOnlineEvaluators:
     def test_method_spend_with_all_params(self, client: Langsmith) -> None:
         online_evaluator = client.online_evaluators.spend(
             period_start="period_start",
+            agent_id="agent_id",
             dataset_id="dataset_id",
             evaluator_id="evaluator_id",
             feedback_key="feedback_key",
@@ -734,6 +735,7 @@ class TestAsyncOnlineEvaluators:
     async def test_method_spend_with_all_params(self, async_client: AsyncLangsmith) -> None:
         online_evaluator = await async_client.online_evaluators.spend(
             period_start="period_start",
+            agent_id="agent_id",
             dataset_id="dataset_id",
             evaluator_id="evaluator_id",
             feedback_key="feedback_key",
