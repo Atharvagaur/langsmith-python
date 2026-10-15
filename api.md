@@ -292,6 +292,23 @@ Methods:
 - <code title="get /api/v1/platform/annotation-queues/{queue_id}/items/count">client.annotation_queues.items.<a href="./src/langsmith/resources/annotation_queues/items.py">retrieve_count</a>(queue_id, \*\*<a href="src/langsmith/types/annotation_queues/item_retrieve_count_params.py">params</a>) -> <a href="./src/langsmith/types/annotation_queues/item_retrieve_count_response.py">ItemRetrieveCountResponse</a></code>
 - <code title="get /api/v1/platform/annotation-queues/{queue_id}/items/{item_id}/placement">client.annotation_queues.items.<a href="./src/langsmith/resources/annotation_queues/items.py">retrieve_placement</a>(item_id, \*, queue_id) -> <a href="./src/langsmith/types/annotation_queues/item_retrieve_placement_response.py">ItemRetrievePlacementResponse</a></code>
 
+# PromptWebhooks
+
+Types:
+
+```python
+from langsmith.types import PromptWebhook, PromptWebhookListResponse, PromptWebhookTestResponse
+```
+
+Methods:
+
+- <code title="post /api/v1/prompt-webhooks">client.prompt_webhooks.<a href="./src/langsmith/resources/prompt_webhooks.py">create</a>(\*\*<a href="src/langsmith/types/prompt_webhook_create_params.py">params</a>) -> <a href="./src/langsmith/types/prompt_webhook.py">PromptWebhook</a></code>
+- <code title="get /api/v1/prompt-webhooks/{webhook_id}">client.prompt_webhooks.<a href="./src/langsmith/resources/prompt_webhooks.py">retrieve</a>(webhook_id) -> <a href="./src/langsmith/types/prompt_webhook.py">PromptWebhook</a></code>
+- <code title="patch /api/v1/prompt-webhooks/{webhook_id}">client.prompt_webhooks.<a href="./src/langsmith/resources/prompt_webhooks.py">update</a>(webhook_id, \*\*<a href="src/langsmith/types/prompt_webhook_update_params.py">params</a>) -> <a href="./src/langsmith/types/prompt_webhook.py">PromptWebhook</a></code>
+- <code title="get /api/v1/prompt-webhooks">client.prompt_webhooks.<a href="./src/langsmith/resources/prompt_webhooks.py">list</a>() -> <a href="./src/langsmith/types/prompt_webhook_list_response.py">PromptWebhookListResponse</a></code>
+- <code title="delete /api/v1/prompt-webhooks/{webhook_id}">client.prompt_webhooks.<a href="./src/langsmith/resources/prompt_webhooks.py">delete</a>(webhook_id) -> None</code>
+- <code title="post /api/v1/prompt-webhooks/test">client.prompt_webhooks.<a href="./src/langsmith/resources/prompt_webhooks.py">test</a>(\*\*<a href="src/langsmith/types/prompt_webhook_test_params.py">params</a>) -> <a href="./src/langsmith/types/prompt_webhook_test_response.py">PromptWebhookTestResponse</a></code>
+
 # Info
 
 Types:
