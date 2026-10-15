@@ -225,6 +225,17 @@ EVALUATOR = ls.evaluator_address()
 class TestOtherAddresses:
     """Addresses of other features name a project for the query APIs only."""
 
+    def test_public_factories(self) -> None:
+        assert ls.agent_address("support", "Production") == SUPPORT
+        assert ls.experiment_address("0190C3D4-0000-7000-8000-0000000000B1") == EXPERIMENT
+        assert ls.evaluator_address() == EVALUATOR
+        for address in (SUPPORT, EXPERIMENT, EVALUATOR):
+            assert json.loads(json.dumps(address)) == address
+
+    def test_they_are_addresses(self) -> None:
+        for address in (SUPPORT, EXPERIMENT, EVALUATOR):
+            assert isinstance(address, dict)
+
     def test_the_api_addresses(self) -> None:
         assert EXPERIMENT == {
             "kind": "EXPERIMENT",
