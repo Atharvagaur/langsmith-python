@@ -48,6 +48,7 @@ class TestOnlineEvaluators:
                     }
                 },
                 "require_attachments": True,
+                "workspace_secrets_keys": ["string"],
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -152,6 +153,7 @@ class TestOnlineEvaluators:
                     }
                 },
                 "require_attachments": True,
+                "workspace_secrets_keys": ["string"],
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -426,6 +428,7 @@ class TestAsyncOnlineEvaluators:
                     }
                 },
                 "require_attachments": True,
+                "workspace_secrets_keys": ["string"],
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
@@ -530,6 +533,7 @@ class TestAsyncOnlineEvaluators:
                     }
                 },
                 "require_attachments": True,
+                "workspace_secrets_keys": ["string"],
             },
             llm_evaluator={
                 "commit_hash_or_tag": "commit_hash_or_tag",
