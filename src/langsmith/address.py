@@ -11,7 +11,7 @@ Query APIs resolve an address to its project (`client.sessions.resolve`). Only a
 `AgentAddress` can receive traces, so tracing entry points take an `AgentAddress`,
 and anything else is rejected.
 The environment of an agent is one of `LOCAL`, `DEVELOPMENT`, `STAGING` or
-`PRODUCTION`. Factories accept any case; only LRN identifiers use lowercase.
+`PRODUCTION`. Factories accept any case.
 
 Example:
     ```python
@@ -52,7 +52,6 @@ __all__ = [
 _AGENT_ID_PATTERN = re.compile(r"[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _ENVIRONMENTS = ("local", "development", "staging", "production")
 _UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
-_LRN_PATTERN = re.compile(r"lrn:agents/([^/]+)/environments/([^/]+)")
 
 
 class AgentAddress(TypedDict):
@@ -157,17 +156,28 @@ def ensure_agent(address: Any) -> AgentAddress:
     )
 
 
-def address_to_lrn(address: AgentAddress) -> str:
-    """Convert a validated agent address to its ingestion wire identifier."""
-    return f"lrn:agents/{address['id']}/environments/{address['environment'].lower()}"
+def ensure_address(address: Any) -> Address:
+    """Validate an `Address` of any kind, as a lookup takes it.
 
+    For the calls that only resolve an address to its project, such as
+    `get_run_url`. Whatever receives traces takes `ensure_agent`. A string is
+    not an address.
 
-def address_from_lrn(value: Any) -> AgentAddress:
-    """Parse an untrusted wire identifier without echoing it in errors."""
-    match = _LRN_PATTERN.fullmatch(value) if isinstance(value, str) else None
-    if match is None:
-        raise utils.LangSmithUserError("Not an agent address.")
-    return agent_address(*match.groups())
+    Raises:
+        LangSmithUserError: If `address` is not an `Address`.
+    """
+    if isinstance(address, dict):
+        address = cast(dict[str, Any], address)
+        kind = address.get("kind")
+        if kind == "AGENT":
+            return agent_address(cast(str, address.get("id")), cast(str, address.get("environment")))
+        if kind == "EXPERIMENT":
+            return experiment_address(cast(str, address.get("id")))
+        if kind == "EVALUATOR":
+            return evaluator_address()
+    raise utils.LangSmithUserError(
+        f"An address must be an `AgentAddress`, `ExperimentAddress` or `EvaluatorAddress`, got {address!r}."
+    )
 
 
 def address_from_env() -> Optional[AgentAddress]:

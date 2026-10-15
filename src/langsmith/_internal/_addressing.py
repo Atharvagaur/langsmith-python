@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import re
 import warnings
 from collections.abc import Mapping
 from typing import Any, Optional
@@ -42,6 +43,9 @@ from langsmith.address import AgentAddress, EnvAddressError
 
 _LOGGER = logging.getLogger(__name__)
 
+# The wire form of an agent address. The parts are validated by `agent_address`.
+_LRN_PATTERN = re.compile(r"lrn:agents/([^/]+)/environments/([^/]+)")
+
 
 def check_address(address: Any) -> Optional[AgentAddress]:
     """Return `address` if it is an `AgentAddress`, or `None` if it is `None`.
@@ -50,6 +54,17 @@ def check_address(address: Any) -> Optional[AgentAddress]:
         utils.LangSmithUserError: If `address` is not an `AgentAddress`.
     """
     return None if address is None else _address.ensure_agent(address)
+
+
+def check_lookup_address(address: Any) -> Optional[_address.Address]:
+    """Return `address` if it is an `Address` of any kind, or `None` if it is `None`.
+
+    For the calls that resolve an address to its project, which take any kind.
+
+    Raises:
+        utils.LangSmithUserError: If `address` is not an `Address`.
+    """
+    return None if address is None else _address.ensure_address(address)
 
 
 def normalize_replicas(replicas: Optional[Any]) -> Optional[list]:
@@ -66,6 +81,19 @@ def normalize_replicas(replicas: Optional[Any]) -> Optional[list]:
             normalized_replica["address"] = check_address(replica["address"])
         normalized.append(normalized_replica)
     return normalized
+
+
+def address_to_lrn(address: AgentAddress) -> str:
+    """Convert a validated agent address to its ingestion wire identifier."""
+    return f"lrn:agents/{address['id']}/environments/{address['environment'].lower()}"
+
+
+def address_from_lrn(value: Any) -> AgentAddress:
+    """Parse an untrusted wire identifier without echoing it in errors."""
+    match = _LRN_PATTERN.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise utils.LangSmithUserError("Not an agent address.")
+    return _address.agent_address(*match.groups())
 
 
 def warn_is_beta() -> None:
@@ -136,6 +164,21 @@ def _both_at_one_level(project: str, address: AgentAddress, where: str) -> utils
     )
 
 
+def otlp_destination_headers(project: Optional[str], address: Optional[AgentAddress]) -> dict[str, str]:
+    """Return the OTLP headers that send an export to a project or an agent.
+
+    The values come only from a validated `AgentAddress`, so a caller's string
+    never reaches a header unchecked. The backend rejects an export that names
+    both, so `address` wins here rather than sending both.
+    """
+    if address is not None:
+        return {
+            "Langsmith-Agent-Id": address["id"],
+            "Langsmith-Agent-Environment": address["environment"].lower(),
+        }
+    return {"Langsmith-Project": project} if project else {}
+
+
 def log_untraced(error: EnvAddressError) -> None:
     """Log, once per distinct cause, that calls run untraced for a bad env."""
     _log_untraced_once(str(error))
@@ -182,26 +225,11 @@ def warn_on_env() -> None:
     )
 
 
-def reject_url(session_id: Optional[Any], address: Optional[Any]) -> None:
-    """Refuse to build a run URL the SDK cannot know.
-
-    A run URL is keyed on the project id, and the endpoint resolves an address
-    to its project without telling the SDK which.
-    """
-    if session_id is not None or address is None:
-        return
-    raise utils.LangSmithUserError(
-        "No run URL is available for an addressed run yet. The endpoint "
-        "resolves the address to its project, so only it knows the project this "
-        "run is in. Read the run back and build the URL from its `session_id`."
-    )
-
-
 def reject_conflicting(
     *,
     project: Optional[Any] = None,
     session_id: Optional[Any] = None,
-    address: Optional[AgentAddress] = None,
+    address: Optional[_address.Address] = None,
 ) -> None:
     """Reject a call that names both a project and an address.
 
@@ -236,7 +264,7 @@ def apply_to_payload(payload: dict, *, update: bool = False) -> None:
         # Wire data already applied: a retried batch re-sends it. It is parsed
         # again, so a malformed one cannot fail the whole batch in the backend.
         try:
-            address = _address.address_from_lrn(address)
+            address = address_from_lrn(address)
         except utils.LangSmithUserError:
             raise utils.LangSmithUserError("The run's `address` is not a valid agent address.") from None
     else:
@@ -247,7 +275,7 @@ def apply_to_payload(payload: dict, *, update: bool = False) -> None:
     if address is None:
         return
     warn_is_beta()
-    payload["address"] = _address.address_to_lrn(address)
+    payload["address"] = address_to_lrn(address)
     if not named_project:
         payload.pop("session_name", None)
         payload.pop("session_id", None)
