@@ -352,6 +352,7 @@ def test_error_agent_sync_async_records_errors(mode: str, mock_ls_client: Client
                 mock_ls_client,
                 input_text="hello",
             )
+        mock_ls_client.flush()
     else:
         # google-adk < 2.7 swallows the agent error inside Runner.run's
         # background thread; >= 2.7 (on Python 3.11+) re-raises it to the

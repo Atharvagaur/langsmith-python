@@ -61,6 +61,5 @@
   "release-type": "python",
   "extra-files": [
     "src/langsmith/_version.py"
-  ],
-  "release-as": "0.14.10"
+  ]
 }
