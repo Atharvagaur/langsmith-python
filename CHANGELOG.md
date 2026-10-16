@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.10](https://github.com/langchain-ai/langsmith-python/compare/v0.14.9-rc.1...v0.14.10) (2026-10-15)
+
+
+### Chores
+
+* switch release-please to the stable channel, release 0.14.10 ([#52](https://github.com/langchain-ai/langsmith-python/issues/52)) ([9cbdb21](https://github.com/langchain-ai/langsmith-python/commit/9cbdb21b14c666279ae1465fe75b01cb5871a83b))
+
 ## [0.14.9-rc.1](https://github.com/langchain-ai/langsmith-python/compare/v0.12.6...v0.14.9-rc.1) (2026-10-15)
 
 
