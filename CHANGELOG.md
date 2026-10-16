@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.11](https://github.com/langchain-ai/langsmith-python/compare/v0.14.10...v0.14.11) (2026-10-16)
+
+
+### Chores
+
+* drop the release-as pin now that 0.14.10 is out ([#68](https://github.com/langchain-ai/langsmith-python/issues/68)) ([1b41cc8](https://github.com/langchain-ai/langsmith-python/commit/1b41cc8fae1b23bc16f50cd0355dc53092803580))
+
 ## [0.14.10](https://github.com/langchain-ai/langsmith-python/compare/v0.14.9-rc.1...v0.14.10) (2026-10-15)
 
 
